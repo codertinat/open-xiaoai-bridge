@@ -372,6 +372,9 @@ APP_CONFIG = {
         "url": "ws://localhost:18789",  # OpenClaw WebSocket 地址
         "token": "",  # 认证令牌（如果需要）
         "session_key": "main",  # 会话标识
+        "tts_enabled": False,  # 启用 Doubao TTS 播放 OpenClaw 回复
+        "blocking_playback": True,  # TTS 播放是否阻塞等待完成 (默认 True)
+        "tts_speaker": "zh_female_cancan_mars_bigtts",  # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
     },
 }
 ```
@@ -523,3 +526,65 @@ async def before_wakeup(speaker, text, source, xiaozhi, xiaoai, app):
             return False  # 不唤醒小智
     return True
 ```
+
+#### Q：如何让 OpenClaw 的回复用 Doubao TTS 播放？
+
+启用 `tts_enabled` 配置后，OpenClaw 的 AI 回复会自动使用 Doubao TTS 合成语音并播放：
+
+```python
+APP_CONFIG = {
+    "openclaw": {
+        "url": "ws://localhost:18789",
+        "token": "your_token",
+        "session_key": "main",
+        "tts_enabled": True,  # 启用 TTS 播放回复
+    },
+    "tts": {
+        "doubao": {
+            "app_id": "your_app_id",
+            "access_key": "your_access_key",
+            "default_speaker": "zh_female_xiaohe_uranus_bigtts",
+        }
+    },
+}
+```
+
+注意：需要先配置 `tts.doubao` 的 API 凭证才能正常使用。
+```
+
+#### Q：如何为 OpenClaw 设置不同的 TTS 音色？
+
+默认情况下，OpenClaw 使用 `tts.doubao.default_speaker` 的音色。你可以通过 `tts_speaker` 配置项为 OpenClaw 设置独立的音色：
+
+```python
+APP_CONFIG = {
+    "openclaw": {
+        "tts_enabled": True,
+        "tts_speaker": "zh_female_cancan_mars_bigtts",  # OpenClaw 专用音色
+    },
+    "tts": {
+        "doubao": {
+            "default_speaker": "zh_female_xiaohe_uranus_bigtts",  # 默认音色
+        }
+    },
+}
+```
+
+可用音色列表请参考 `/api/tts/doubao_voices` 接口或 [Doubao 官方文档](https://www.volcengine.com/docs/6561/1257544)。
+
+#### Q：TTS 播放是阻塞还是非阻塞的？
+
+默认使用**阻塞方式**（`blocking_playback: True`），即等待音频播放完成才返回。如果你想改为非阻塞方式，可以设置：
+
+```python
+APP_CONFIG = {
+    "openclaw": {
+        "tts_enabled": True,
+        "blocking_playback": False,  # 非阻塞播放
+    },
+}
+```
+
+**区别**：
+- **阻塞模式**（默认）：播放完成后才继续执行，不会被其他音频打断
+- **非阻塞模式**：启动播放后立即返回，可能被后续的音频指令打断

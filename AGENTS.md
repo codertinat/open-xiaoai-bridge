@@ -1,6 +1,6 @@
 # AGENTS.md - Bridge Module Guide
 
-> 本目录 (`examples/bridge/`) 包含让小爱音箱接入小智 AI 和 OpenClaw 的完整实现。
+> 本目录包含让小爱音箱接入小智 AI 和 OpenClaw 的完整实现。
 > 通过接管音箱的音频输入输出，实现与第三方 AI 服务的对话。
 
 ## 项目架构
@@ -205,6 +205,5 @@ python main.py
 ## 参考资源
 
 - 项目主页: https://github.com/idootop/open-xiaoai
-- 刷机教程: ../../docs/flash.md（从仓库根目录）
-- Client 端: ../../packages/client-rust/README.md（从仓库根目录）
-- 仓库结构: 本模块位于 `examples/bridge/`，Client 端补丁位于 `packages/client-rust/`
+- 刷机教程: https://github.com/idootop/open-xiaoai/blob/main/docs/flash.md（从仓库根目录）
+- Client 端: https://github.com/idootop/open-xiaoai/blob/main/packages/client-rust/README.md（从仓库根目录）

@@ -15,7 +15,7 @@ async def before_wakeup(speaker, text, source, xiaozhi, xiaoai, app):
     """
     if source == "kws":
         # 播放唤醒提示语
-        await speaker.play(url="http://192.168.3.6:8080/hello.wav")
+        await speaker.play(url="http://127.0.0.1:8080/hello.wav")
 
         # 给小智发送打招呼消息
         # await xiaozhi.send_text("小智在吗")
@@ -33,7 +33,7 @@ async def before_wakeup(speaker, text, source, xiaozhi, xiaoai, app):
             # 等待 2 秒，让小爱 TTS 恢复可用
             time.sleep(2)
             # 播放唤醒提示语（如果你不使用自带的小爱 TTS，可以去掉上面的延时）
-            await speaker.play(url="http://192.168.3.6:8080/hello.wav")
+            await speaker.play(url="http://127.0.0.1:8080/hello.wav")
             # 唤醒小智 AI
             return True
         if text.startswith("让龙虾"):
@@ -45,7 +45,7 @@ async def after_wakeup(speaker):
     """
     退出唤醒状态
     """
-    await speaker.play(url="http://192.168.3.6:8080/bye.wav")
+    await speaker.play(url="http://127.0.0.1:8080/bye.wav")
 
 
 def _ensure_dependencies(requirements: list[str]):
@@ -101,8 +101,8 @@ APP_CONFIG = {
         "min_silence_duration": 500,
     },
     "xiaozhi": {
-        "OTA_URL": "http://192.168.3.6:8003/xiaozhi/ota/",
-        "WEBSOCKET_URL": "ws://192.168.3.6:8000/xiaozhi/v1/",
+        "OTA_URL": "http://127.0.0.1:8003/xiaozhi/ota/",
+        "WEBSOCKET_URL": "ws://127.0.0.1:8000/xiaozhi/v1/",
         "WEBSOCKET_ACCESS_TOKEN": "", #（可选）一般用不到这个值
         "DEVICE_ID": "6c:1f:f7:8d:61:b0", #（可选）默认自动生成
         "VERIFICATION_CODE": "", # 首次登陆时，验证码会在这里更新
@@ -130,5 +130,8 @@ APP_CONFIG = {
         "url": "ws://localhost:18789",  # OpenClaw WebSocket 地址
         "token": "",  # OpenClaw 认证令牌
         "session_key": "main",  # 会话标识
+        "tts_enabled": False,  # 启用 Doubao TTS 播放 OpenClaw 回复 (需要配置 tts.doubao)
+        "blocking_playback": True,  # TTS 播放是否阻塞等待完成 (默认 True)
+        # "tts_speaker": "zh_female_cancan_mars_bigtts",  # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
     },
 }
