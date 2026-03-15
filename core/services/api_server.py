@@ -5,85 +5,13 @@ Provides endpoints to play text/audio remotely
 
 import asyncio
 import json
-import io
-import numpy as np
-import soundfile as sf
+import os
+
+import open_xiaoai_server
 from aiohttp import web
 from core.ref import get_speaker, get_xiaoai
 from core.utils.logger import logger
 from core.services.tts.doubao import DoubaoTTS
-
-
-def decode_audio_to_pcm(audio_data: bytes, filename: str, target_sample_rate: int = 24000) -> bytes:
-    """
-    Decode audio file to PCM format (16-bit, target_sample_rate Hz, mono)
-    Supports WAV, MP3, OGG, FLAC and other formats via soundfile
-
-    Args:
-        audio_data: Raw audio file bytes
-        filename: Original filename (for format detection)
-        target_sample_rate: Target sample rate in Hz (default 24000, can be 48000, 44100, etc.)
-    """
-    ext = filename.lower().split('.')[-1] if '.' in filename else ''
-
-    try:
-        # Use soundfile to read audio data
-        audio_array, sample_rate = sf.read(io.BytesIO(audio_data), dtype='float32')
-
-        logger.info(f"[APIServer] Audio: shape={audio_array.shape}, rate={sample_rate}, format={ext}")
-
-        # Convert to mono if stereo
-        if audio_array.ndim > 1:
-            audio_array = audio_array.mean(axis=1)
-
-        # Resample if needed (high-quality using scipy)
-        if sample_rate != target_sample_rate:
-            audio_array = resample_audio(audio_array, sample_rate, target_sample_rate)
-
-        # Convert back to 16-bit signed PCM
-        audio_array = np.clip(audio_array, -1.0, 1.0)
-        audio_array = (audio_array * 32767).astype(np.int16)
-
-        return audio_array.tobytes()
-
-    except Exception as e:
-        logger.error(f"[APIServer] Failed to decode audio: {e}")
-        # Fallback: return original data
-        return audio_data
-
-
-def resample_audio(audio_array: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    """
-    High-quality resampling using scipy.signal.resample_poly
-    Uses polyphase filtering for better quality than linear interpolation
-    """
-    if src_rate == dst_rate:
-        return audio_array
-
-    try:
-        from scipy import signal
-
-        # Calculate greatest common divisor for efficient resampling
-        gcd = np.gcd(src_rate, dst_rate)
-        up = dst_rate // gcd
-        down = src_rate // gcd
-
-        # Use polyphase resampling (high quality)
-        resampled = signal.resample_poly(audio_array, up, down, window=('kaiser', 5.0))
-
-        logger.info(f"[APIServer] Resampled from {src_rate}Hz to {dst_rate}Hz using polyphase filter (up={up}, down={down})")
-        return resampled
-
-    except ImportError:
-        logger.warning("[APIServer] scipy not available, falling back to linear interpolation")
-        # Fallback to linear interpolation
-        src_length = len(audio_array)
-        dst_length = int(src_length * dst_rate / src_rate)
-        indices = np.linspace(0, src_length - 1, dst_length)
-        indices_low = np.floor(indices).astype(np.int32)
-        indices_high = np.minimum(indices_low + 1, src_length - 1)
-        fractions = indices - indices_low
-        return audio_array[indices_low] * (1 - fractions) + audio_array[indices_high] * fractions
 
 
 class APIServer:
@@ -287,9 +215,13 @@ class APIServer:
                     status=503
                 )
 
-            # Decode audio file to PCM format with custom sample rate
-            pcm_data = decode_audio_to_pcm(bytes(audio_data), filename, target_sample_rate=sample_rate)
-            logger.info(f"[APIServer] Decoded to PCM: {len(pcm_data)} bytes at {sample_rate}Hz")
+            audio_format = os.path.splitext(filename)[1].lstrip(".").lower() or "mp3"
+            pcm_data = open_xiaoai_server.decode_audio(
+                bytes(audio_data),
+                format=audio_format,
+                sample_rate=sample_rate,
+            )
+            logger.info(f"[APIServer] Decoded to PCM via Rust: {len(pcm_data)} bytes at {sample_rate}Hz")
 
             # Play audio buffer directly (chunked to avoid WebSocket message size limit)
             async def play_audio():
@@ -520,11 +452,7 @@ class APIServer:
             logger.info(f"[APIServer] Doubao TTS: speaker={speaker_id}, resource_id={tts.resource_id}")
 
             use_stream = tts_config.get("stream", False)
-            loop = asyncio.get_event_loop()
-
             if use_stream:
-                import open_xiaoai_server
-
                 async def play_tts_stream():
                     try:
                         await open_xiaoai_server.tts_stream_play(
@@ -548,48 +476,33 @@ class APIServer:
                 else:
                     asyncio.create_task(play_tts_stream())
             else:
-                try:
-                    audio_data = await loop.run_in_executor(
-                        None, lambda: tts.synthesize(text, speed=speed, context_texts=context_texts, emotion=emotion)
-                    )
-                    if not audio_data:
-                        return web.json_response(
-                            {"success": False, "error": "TTS synthesis returned empty audio"},
-                            status=500
-                        )
-                except Exception as e:
-                    logger.error(f"[APIServer] TTS synthesis error: {e}")
-                    return web.json_response(
-                        {"success": False, "error": f"TTS synthesis failed: {str(e)}"},
-                        status=500
-                    )
-
-                logger.info(f"[APIServer] Doubao TTS synthesized: {len(audio_data)} bytes, speaker={speaker_id}")
-
                 async def play_tts_audio():
                     try:
-                        total_size = len(audio_data)
-                        CHUNK_THRESHOLD = 1 * 1024 * 1024  # 1MB
-                        CHUNK_SIZE = 1 * 1024 * 1024
-
-                        if total_size <= CHUNK_THRESHOLD:
-                            logger.debug(f"[APIServer] Playing TTS audio directly: {total_size} bytes")
-                            await speaker.play(buffer=audio_data, blocking=True)
-                        else:
-                            offset = 0
-                            logger.info(f"[APIServer] Playing TTS audio in chunks: {total_size} bytes, chunk_size={CHUNK_SIZE}")
-                            while offset < total_size:
-                                chunk = audio_data[offset:offset + CHUNK_SIZE]
-                                await speaker.play(buffer=chunk, blocking=False)
-                                offset += len(chunk)
-                                await asyncio.sleep(0.05)
-
-                        logger.debug(f"[APIServer] Finished playing TTS audio")
+                        await open_xiaoai_server.tts_play(
+                            text,
+                            app_id=app_id,
+                            access_key=access_key,
+                            resource_id=tts.resource_id,
+                            speaker=speaker_id,
+                            speed=speed,
+                            format=tts.audio_format,
+                            sample_rate=24000,
+                            emotion=emotion,
+                            context_texts=context_texts,
+                        )
+                        logger.debug("[APIServer] Finished playing TTS audio")
                     except Exception as e:
                         logger.error(f"[APIServer] Error playing TTS audio: {e}")
+                        raise
 
                 if blocking:
-                    await play_tts_audio()
+                    try:
+                        await play_tts_audio()
+                    except Exception as e:
+                        return web.json_response(
+                            {"success": False, "error": f"TTS playback failed: {str(e)}"},
+                            status=500
+                        )
                 else:
                     asyncio.create_task(play_tts_audio())
 

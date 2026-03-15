@@ -12,18 +12,40 @@ Usage:
 import sys
 import os
 import wave
+from pathlib import Path
 
 # Add project root to path so imports work when running from any directory
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
+
+def add_local_venv_site_packages() -> None:
+    """Allow running this script with system python3 by reusing the project's .venv."""
+    venv_lib = PROJECT_ROOT / ".venv" / "lib"
+    if not venv_lib.exists():
+        return
+
+    for site_packages in sorted(venv_lib.glob("python*/site-packages"), reverse=True):
+        site_path = str(site_packages)
+        if site_path not in sys.path:
+            sys.path.insert(0, site_path)
+        break
+
+
+add_local_venv_site_packages()
+
+import json
 import time
 import subprocess
 import tempfile
+import base64
+import requests
+import open_xiaoai_server
 from config import APP_CONFIG
 from core.services.tts.doubao import DoubaoTTS
 
 
-SAMPLE_RATE = 24000  # synthesize() always returns 24000Hz 16-bit mono PCM
+SAMPLE_RATE = 24000
 
 
 def play_audio(audio_data: bytes):
@@ -32,7 +54,6 @@ def play_audio(audio_data: bytes):
         tmp_path = f.name
     try:
         # Wrap raw PCM in a WAV container so afplay/aplay can handle it
-        print(f"  [*] Saving audio to {tmp_path}")
         with wave.open(tmp_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)  # 16-bit = 2 bytes
@@ -78,6 +99,75 @@ def get_tts():
     return DoubaoTTS(app_id=app_id, access_key=access_key, speaker=speaker, resource_id=resource_id), tts_config
 
 
+def fetch_encoded_audio(
+    tts: DoubaoTTS,
+    text: str,
+    fmt: str = None,
+    speed: float = 1.0,
+    context_texts: list = None,
+    emotion: str = None,
+) -> bytes | None:
+    """Fetch encoded audio from Doubao and let Rust handle decoding."""
+    audio_format = fmt or tts.audio_format
+    payload = tts._build_payload(
+        text,
+        format=audio_format,
+        sample_rate=SAMPLE_RATE,
+        speed=speed,
+        context_texts=context_texts,
+        emotion=emotion,
+    )
+    headers = {
+        "X-Api-App-Id": tts.app_id,
+        "X-Api-Access-Key": tts.access_key,
+        "X-Api-Resource-Id": tts.resource_id,
+        "Content-Type": "application/json",
+        "Connection": "keep-alive",
+    }
+
+    response = requests.post(tts.api_url, headers=headers, json=payload, stream=True, timeout=60)
+    if response.status_code >= 400:
+        body = response.text[:500]
+        raise RuntimeError(
+            f"TTS request failed: HTTP {response.status_code}, resource_id={tts.resource_id}, "
+            f"speaker={tts.speaker}, body={body}"
+        )
+
+    encoded_audio = bytearray()
+    try:
+        for chunk in response.iter_lines(decode_unicode=True):
+            if not chunk:
+                continue
+
+            data = json.loads(chunk)
+            if data.get("code", 0) == 0 and data.get("data"):
+                encoded_audio.extend(base64.b64decode(data["data"]))
+                continue
+            if data.get("code", 0) == 20000000:
+                break
+            if data.get("code", 0) > 0:
+                raise RuntimeError(f"TTS API Error {data.get('code')}: {data.get('message')}")
+    finally:
+        response.close()
+
+    return bytes(encoded_audio) if encoded_audio else None
+
+
+def synthesize_pcm(tts: DoubaoTTS, text: str, fmt: str = None) -> bytes | None:
+    """Fetch encoded audio in Python and decode it in Rust."""
+    audio_format = fmt or tts.audio_format
+    encoded_audio = fetch_encoded_audio(tts, text, fmt=audio_format)
+    if not encoded_audio:
+        return None
+    return bytes(
+        open_xiaoai_server.decode_audio(
+            encoded_audio,
+            format=audio_format,
+            sample_rate=SAMPLE_RATE,
+        )
+    )
+
+
 TEXT = '央视财经频道《经济半小时》两会特别节目《中国经济向新行：智能经济活力奔涌》播出，聚焦我国人工智能大模型已进入全球第一梯队，而阿里千问APP作为AI助手的典型代表，正以"AI办事"的创新模式，深刻重塑大众的日常生活。'
 
 def run_normal(play: bool = True):
@@ -91,7 +181,7 @@ def run_normal(play: bool = True):
     print(f"Text    : {TEXT[:60]}...")
 
     start = time.time()
-    audio_data = tts.synthesize(TEXT)
+    audio_data = synthesize_pcm(tts, TEXT)
     elapsed = time.time() - start
 
     if audio_data:
@@ -121,7 +211,7 @@ def run_compare(play: bool = True):
     for fmt in ("ogg_opus", "mp3"):
         print(f"\n--- {fmt} ---")
         start = time.time()
-        data = tts.synthesize(TEXT, format=fmt)
+        data = synthesize_pcm(tts, TEXT, fmt=fmt)
         elapsed = time.time() - start
         if data:
             print(f"✅ Size: {len(data):,} bytes, Time: {elapsed:.2f}s")

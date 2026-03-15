@@ -2,15 +2,7 @@
 Doubao (ByteDance Volcano Engine) TTS Service
 """
 
-import base64
 import json
-import io
-import requests
-import numpy as np
-import soundfile as sf
-from typing import Optional, Generator
-from scipy import signal
-from core.utils.logger import logger
 
 
 class DoubaoTTS:
@@ -484,16 +476,6 @@ class DoubaoTTS:
             return "seed-icl-2.0"
         return "seed-tts-1.0"
 
-    def _get_headers(self) -> dict:
-        """生成请求头"""
-        return {
-            "X-Api-App-Id": self.app_id,
-            "X-Api-Access-Key": self.access_key,
-            "X-Api-Resource-Id": self.resource_id,
-            "Content-Type": "application/json",
-            "Connection": "keep-alive",
-        }
-
     def _build_payload(
         self,
         text: str,
@@ -542,177 +524,6 @@ class DoubaoTTS:
             "user": {"uid": "xiaozhi_user"},
             "req_params": req_params,
         }
-
-    def synthesize(
-        self,
-        text: str,
-        format: str = None,
-        sample_rate: int = 24000,
-        speed: float = 1.0,
-        context_texts: list = None,
-        emotion: str = None,
-    ) -> Optional[bytes]:
-        """
-        合成语音，返回音频数据
-
-        Args:
-            text: 要合成的文本
-            format: 音频格式 (mp3, wav, ogg_opus)，默认使用实例的 audio_format
-            sample_rate: 采样率
-            speed: 语速 (0.8-2.0)
-            emotion: 情感参数 (如: happy, sad, angry, excited 等)
-
-        Returns:
-            PCM 音频数据 (bytes) 或 None (失败)
-        """
-        if format is None:
-            format = self.audio_format
-        headers = self._get_headers()
-        payload = self._build_payload(text, format, sample_rate, speed, context_texts=context_texts, emotion=emotion)
-
-        logger.info(f"[DoubaoTTS] Synthesizing text: {text[:300]}...")
-        session = requests.Session()
-        response = None
-        try:
-            response = session.post(
-                self.api_url, headers=headers, json=payload, stream=True, timeout=60
-            )
-            response.raise_for_status()
-
-            audio_data = bytearray()
-
-            for chunk in response.iter_lines(decode_unicode=True):
-                if not chunk:
-                    continue
-
-                data = json.loads(chunk)
-
-                # 音频数据
-                if data.get("code", 0) == 0 and "data" in data and data["data"]:
-                    chunk_audio = base64.b64decode(data["data"])
-                    audio_data.extend(chunk_audio)
-                    continue
-
-                # 句子信息
-                if data.get("code", 0) == 0 and "sentence" in data and data["sentence"]:
-                    continue
-
-                # 完成
-                if data.get("code", 0) == 20000000:
-                    break
-
-                # 错误
-                if data.get("code", 0) > 0:
-                    print(f"TTS Error: {data}")
-                    print(f"TTS Request Info: resource_id={self.resource_id}, speaker={self.speaker}")
-                    raise Exception(f"TTS API Error {data.get('code')}: {data.get('message')}")
-
-            if not audio_data:
-                return None
-
-            # 解码为 PCM
-            return self._decode_to_pcm(bytes(audio_data), format, target_sample_rate=24000)
-
-        except Exception as e:
-            print(f"TTS request failed: {e}")
-            return None
-        finally:
-            if response:
-                response.close()
-            session.close()
-
-    def synthesize_stream(
-        self,
-        text: str,
-        format: str = None,
-        sample_rate: int = 24000,
-        speed: float = 1.0,
-        context_texts: list = None,
-        emotion: str = None,
-    ) -> Generator[bytes, None, None]:
-        """
-        流式合成语音
-
-        Yields:
-            PCM 音频数据块
-        """
-        if format is None:
-            format = self.audio_format
-        headers = self._get_headers()
-        payload = self._build_payload(text, format, sample_rate, speed, context_texts=context_texts, emotion=emotion)
-
-        session = requests.Session()
-        response = None
-        buffer = bytearray()
-
-        try:
-            response = session.post(
-                self.api_url, headers=headers, json=payload, stream=True, timeout=60
-            )
-            response.raise_for_status()
-
-            for chunk in response.iter_lines(decode_unicode=True):
-                if not chunk:
-                    continue
-
-                data = json.loads(chunk)
-
-                if data.get("code", 0) == 0 and "data" in data and data["data"]:
-                    chunk_audio = base64.b64decode(data["data"])
-                    buffer.extend(chunk_audio)
-
-                    # 积累一定数据后解码并yield
-                    if len(buffer) > 8192:
-                        pcm = self._decode_to_pcm(bytes(buffer), format, target_sample_rate=24000)
-                        if pcm:
-                            yield pcm
-                        buffer.clear()
-
-                elif data.get("code", 0) == 20000000:
-                    # 最后一块
-                    if buffer:
-                        pcm = self._decode_to_pcm(bytes(buffer), format, target_sample_rate=24000)
-                        if pcm:
-                            yield pcm
-                    break
-
-        except Exception as e:
-            print(f"TTS stream error: {e}")
-        finally:
-            if response:
-                response.close()
-            session.close()
-
-    def _decode_to_pcm(
-        self, audio_data: bytes, format: str, target_sample_rate: int = 24000
-    ) -> Optional[bytes]:
-        """将音频数据解码为 PCM 格式"""
-        try:
-            # 使用 soundfile 读取音频
-            with io.BytesIO(audio_data) as bio:
-                data, sr = sf.read(bio, dtype="float32")
-
-            # 转为单声道
-            if len(data.shape) > 1:
-                data = np.mean(data, axis=1)
-
-            # 重采样到目标采样率
-            if sr != target_sample_rate:
-                # 计算重采样比例
-                gcd = np.gcd(sr, target_sample_rate)
-                up = target_sample_rate // gcd
-                down = sr // gcd
-                data = signal.resample_poly(data, up, down)
-
-            # 转为 16-bit int
-            data = np.clip(data, -1.0, 1.0)
-            data = (data * 32767).astype(np.int16)
-
-            return data.tobytes()
-
-        except Exception as e:
-            print(f"Decode audio error: {e}")
-            return None
 
     @classmethod
     def list_voices(cls) -> dict:

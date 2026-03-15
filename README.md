@@ -11,7 +11,7 @@
 ## 功能特性
 
 - 🦞 **OpenClaw 集成** — 接入 [OpenClaw](https://github.com/openclaw/openclaw)，支持豆包 TTS 播放回复，Agent 可通过 SKILL 自由选择音色
-- 🤖 **接入小智 AI** — 接入 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)
+- 🤖 **小智 AI 集成** — 接入 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)
 - 🎙️ **自定义唤醒词** — 支持中英文，可设置多个 (目前只支持小智)
 - 💬 **连续对话 & 随时打断** — 多轮对话无需反复唤醒 (目前只支持小智和原生小爱)
 - ⚡ **VAD + KWS 唤醒** — 语音活动检测前置，减少不必要的关键词识别，更省电
@@ -183,6 +183,8 @@ curl -O https://raw.githubusercontent.com/coderzc/open-xiaoai-bridge/main/docker
 docker compose up -d
 ```
 
+如果是手动执行 `docker build`，构建 Rust 扩展时还需要镜像内具备 `pkg-config` 和 OpenSSL 开发包；项目内置的 `Dockerfile` 已包含这些依赖。
+
 #### 方式二：本地编译运行
 
 **1. 克隆源码**
@@ -197,6 +199,7 @@ cd open-xiaoai-bridge
 - [uv](https://github.com/astral-sh/uv)
 - [Rust](https://www.rust-lang.org/learn/get-started)
 - [Opus](https://opus-codec.org/)（动态链接库，可参考[安装说明](https://github.com/huangjunsen0406/py-xiaozhi/blob/3bfd2887244c510a13912c1d63263ae564a941e9/documents/docs/guide/01_%E7%B3%BB%E7%BB%9F%E4%BE%9D%E8%B5%96%E5%AE%89%E8%A3%85.md#2-opus-%E9%9F%B3%E9%A2%91%E7%BC%96%E8%A7%A3%E7%A0%81%E5%99%A8)）
+- Linux / Docker 构建 Rust 扩展时还需要 `pkg-config` 和 OpenSSL 开发包（例如 Debian/Ubuntu 上的 `pkg-config`、`libssl-dev`）
 
 **3. 启动服务**
 
@@ -614,6 +617,18 @@ APP_CONFIG = {
 
 - `stream: False`（默认）：等所有音频合成完成后一次性播放，行为更可预期
 - `stream: True`：流式模式，由 Rust 原生实现（HTTP 流式请求 → symphonia MP3 帧对齐解码 → PCM → WebSocket 推送），首音延迟明显更低；如遇问题切回 `False` 即可
+
+如果只是想验证“豆包流式拉流 + Rust 流式解码”是否跑通，而不依赖小爱音箱，可以直接运行：
+
+```bash
+python3 tests/test_tts_stream.py
+```
+
+也支持指定克隆音色做无音箱冒烟测试：
+
+```bash
+python3 tests/test_tts_stream.py --resource-id seed-icl-2.0 --speaker-id S_xxx
+```
 
 
 
