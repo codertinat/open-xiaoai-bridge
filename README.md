@@ -183,7 +183,7 @@ curl -O https://raw.githubusercontent.com/coderzc/open-xiaoai-bridge/main/docker
 docker compose up -d
 ```
 
-如果是手动执行 `docker build`，构建 Rust 扩展时还需要镜像内具备 `pkg-config` 和 OpenSSL 开发包；项目内置的 `Dockerfile` 已包含这些依赖。
+如果是手动执行 `docker build`，构建 Rust 扩展时还需要镜像内具备 `pkg-config`、`patchelf` 和 OpenSSL 开发包；项目内置的 `Dockerfile` 已包含这些依赖。
 
 #### 方式二：本地编译运行
 
@@ -199,7 +199,7 @@ cd open-xiaoai-bridge
 - [uv](https://github.com/astral-sh/uv)
 - [Rust](https://www.rust-lang.org/learn/get-started)
 - [Opus](https://opus-codec.org/)（动态链接库，可参考[安装说明](https://github.com/huangjunsen0406/py-xiaozhi/blob/3bfd2887244c510a13912c1d63263ae564a941e9/documents/docs/guide/01_%E7%B3%BB%E7%BB%9F%E4%BE%9D%E8%B5%96%E5%AE%89%E8%A3%85.md#2-opus-%E9%9F%B3%E9%A2%91%E7%BC%96%E8%A7%A3%E7%A0%81%E5%99%A8)）
-- Linux / Docker 构建 Rust 扩展时还需要 `pkg-config` 和 OpenSSL 开发包（例如 Debian/Ubuntu 上的 `pkg-config`、`libssl-dev`）
+- Linux / Docker 构建 Rust 扩展时还需要 `pkg-config`、`patchelf` 和 OpenSSL 开发包（例如 Debian/Ubuntu 上的 `pkg-config`、`patchelf`、`libssl-dev`）
 
 **3. 启动服务**
 

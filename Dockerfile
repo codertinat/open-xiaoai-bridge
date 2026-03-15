@@ -4,7 +4,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # 更新源
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl build-essential pkg-config libssl-dev libopus-dev libportaudio2 portaudio19-dev \
+    curl build-essential pkg-config patchelf libssl-dev libopus-dev libportaudio2 portaudio19-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 安装 Rust
@@ -38,7 +38,7 @@ WORKDIR /app
 
 # 更新源
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libopus-dev libssl3 ca-certificates \
+    libopus-dev libssl3 libzstd1 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
