@@ -9,6 +9,7 @@ This module manages the main application flow, coordinating between:
 
 import asyncio
 import json
+import os
 import threading
 import time
 
@@ -73,6 +74,8 @@ class MainApp:
         # Event loop and threads
         self.loop = asyncio.new_event_loop()
         self.loop_thread = None
+        self.config_watch_thread = None
+        self.shutdown_requested = False
         self.running = False
 
         # Task queue
@@ -114,6 +117,8 @@ class MainApp:
         self.loop_thread.daemon = True
         self.loop_thread.start()
 
+        self._start_config_watcher()
+
         time.sleep(0.1)
 
         # Initialize XiaoAI service
@@ -139,7 +144,6 @@ class MainApp:
 
         # Start API Server if enabled
         if self._enable_api_server:
-            import os
             host = os.environ.get("API_SERVER_HOST", "127.0.0.1")
             port = int(os.environ.get("API_SERVER_PORT", 9092))
             self.api_server = APIServer(host=host, port=port)
@@ -162,11 +166,41 @@ class MainApp:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
 
+    def _start_config_watcher(self):
+        """启动配置文件监听线程。"""
+        if self.config_watch_thread and self.config_watch_thread.is_alive():
+            return
+
+        self.config_watch_thread = threading.Thread(
+            target=self._watch_config_file,
+            daemon=True,
+        )
+        self.config_watch_thread.start()
+
+    def _watch_config_file(self):
+        """轮询 config.py 变更并热加载。"""
+        config_path = self.config.get_config_path()
+        last_mtime = None
+
+        while True:
+            if self.shutdown_requested:
+                break
+
+            try:
+                current_mtime = os.path.getmtime(config_path)
+                if last_mtime is None:
+                    last_mtime = current_mtime
+                elif current_mtime != last_mtime:
+                    last_mtime = current_mtime
+                    self.config.reload_app_config()
+                    logger.info(f"[Config] Reloaded runtime config from {config_path}")
+            except Exception as exc:
+                logger.warning(f"[Config] Failed to reload config: {exc}")
+
+            time.sleep(1)
+
     async def _init_xiaozhi(self):
         """Initialize XiaoZhi connection."""
-        # Initialize audio codec
-        self._init_audio()
-
         # Set up XiaoZhi callbacks
         self.xiaozhi.on_network_error = self._on_network_error
         self.xiaozhi.on_incoming_audio = self._on_incoming_audio
@@ -174,9 +208,12 @@ class MainApp:
         self.xiaozhi.on_audio_channel_opened = self._on_audio_channel_opened
         self.xiaozhi.on_audio_channel_closed = self._on_audio_channel_closed
 
-        # Connect to XiaoZhi server
+        # Connect to XiaoZhi server (creates protocol with server_sample_rate)
         self.device_state = DeviceState.CONNECTING
         await self.xiaozhi.connect()
+
+        # Initialize audio codec after connect so protocol params are available
+        self._init_audio()
 
     def _init_audio(self):
         """Initialize audio codec."""
@@ -418,6 +455,7 @@ class MainApp:
     # Shutdown
     def shutdown(self):
         """Shutdown the application."""
+        self.shutdown_requested = True
         self.running = False
 
         if self.audio_codec:
@@ -444,6 +482,9 @@ class MainApp:
 
         if self.loop_thread and self.loop_thread.is_alive():
             self.loop_thread.join(timeout=1.0)
+
+        if self.config_watch_thread and self.config_watch_thread.is_alive():
+            self.config_watch_thread.join(timeout=1.0)
 
     # Public API
     async def send_text(self, text):

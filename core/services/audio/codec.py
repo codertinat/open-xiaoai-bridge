@@ -26,9 +26,20 @@ class AudioCodec:
         self._initialize_audio()
         set_audio_codec(self)
 
+    def _get_server_audio_params(self):
+        """Get server audio parameters from XiaoZhi protocol, with defaults."""
+        xiaozhi = get_xiaozhi()
+        if xiaozhi and xiaozhi.protocol:
+            return xiaozhi.protocol.server_sample_rate, xiaozhi.protocol.server_frame_size
+        # Default values matching WebSocketProtocol defaults
+        default_sample_rate = 24000
+        default_frame_duration = 60
+        return default_sample_rate, int(default_sample_rate * (default_frame_duration / 1000))
+
     def _initialize_audio(self):
         """初始化音频设备和编解码器"""
         self.audio = MyAudio.create()
+        server_sample_rate, server_frame_size = self._get_server_audio_params()
 
         # 初始化音频输入流
         self.input_stream = self.audio.open(
@@ -45,8 +56,8 @@ class AudioCodec:
             output=True,
             format=AudioConfig.FORMAT,
             channels=AudioConfig.CHANNELS,
-            rate=get_xiaozhi().protocol.server_sample_rate,
-            frames_per_buffer=get_xiaozhi().protocol.server_frame_size,
+            rate=server_sample_rate,
+            frames_per_buffer=server_frame_size,
             output_device_index=MyAudio.get_output_device_index(self.audio),
         )
 
@@ -59,7 +70,7 @@ class AudioCodec:
 
         # 初始化Opus解码器
         self.opus_decoder = opuslib.Decoder(
-            fs=get_xiaozhi().protocol.server_sample_rate,
+            fs=server_sample_rate,
             channels=AudioConfig.CHANNELS,
         )
         self.temp_frames = bytes([])
@@ -102,9 +113,10 @@ class AudioCodec:
 
     def decode_audio(self, opus_data):
         """解码音频数据"""
+        _, server_frame_size = self._get_server_audio_params()
         return self.opus_decoder.decode(
             opus_data,
-            frame_size=get_xiaozhi().protocol.server_frame_size,
+            frame_size=server_frame_size,
             decode_fec=False,
         )
 
