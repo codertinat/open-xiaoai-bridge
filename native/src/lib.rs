@@ -1,3 +1,4 @@
+use open_xiaoai::services::audio::config::AudioConfig;
 use open_xiaoai::services::connect::message::MessageManager;
 use open_xiaoai::services::connect::rpc::RPC;
 use pyo3::prelude::*;
@@ -47,11 +48,46 @@ fn run_shell(py: Python, script: String, timeout_millis: f64) -> PyResult<Bound<
     })
 }
 
+/// Stop the remote arecord process (mutes the microphone).
+#[pyfunction]
+fn stop_recording(py: Python) -> PyResult<Bound<PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async {
+        let _ = RPC::instance()
+            .call_remote("stop_recording", None, None)
+            .await;
+        Ok(())
+    })
+}
+
+/// Restart the remote arecord process (unmutes the microphone).
+#[pyfunction]
+fn start_recording(py: Python) -> PyResult<Bound<PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async {
+        let _ = RPC::instance()
+            .call_remote(
+                "start_recording",
+                Some(json!(AudioConfig {
+                    pcm: "noop".into(),
+                    channels: 1,
+                    bits_per_sample: 16,
+                    sample_rate: 16000,
+                    period_size: 1440 / 4,
+                    buffer_size: 1440,
+                })),
+                None,
+            )
+            .await;
+        Ok(())
+    })
+}
+
 #[pymodule]
 fn open_xiaoai_server(_py: Python, m: Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(start_server, &m)?)?;
     m.add_function(wrap_pyfunction!(on_output_data, &m)?)?;
     m.add_function(wrap_pyfunction!(run_shell, &m)?)?;
+    m.add_function(wrap_pyfunction!(stop_recording, &m)?)?;
+    m.add_function(wrap_pyfunction!(start_recording, &m)?)?;
     crate::python::init_module(&m)?;
     crate::tts::init_module(&m)?;
     Ok(())

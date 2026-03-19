@@ -21,6 +21,7 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 XIAOZHI_ENABLED=$(printf '%s' "${XIAOZHI_ENABLE:-}" | tr '[:upper:]' '[:lower:]')
+OPENCLAW_ENABLED=$(printf '%s' "${OPENCLAW_ENABLED:-}" | tr '[:upper:]' '[:lower:]')
 
 # 1. 检查 uv
 if ! command -v uv &> /dev/null; then
@@ -46,7 +47,7 @@ ONNX_LIB_DIR="$(uv run python -c "from pathlib import Path; import onnxruntime; 
     export DYLD_LIBRARY_PATH="${ONNX_LIB_DIR}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
 
 # 3. 检查 KWS 相关模型和关键词文件
-if [[ "$XIAOZHI_ENABLED" =~ ^(1|true|yes)$ ]]; then
+if [[ "$XIAOZHI_ENABLED" =~ ^(1|true|yes)$ ]] || [[ "$OPENCLAW_ENABLED" =~ ^(1|true|yes)$ ]]; then
     MODEL_DIR="core/models"
     REQUIRED_MODELS=("silero_vad.onnx" "tokens.txt" "bpe.model")
     MISSING_MODELS=()
@@ -131,7 +132,7 @@ if [[ "$XIAOZHI_ENABLED" =~ ^(1|true|yes)$ ]]; then
         exit 1
     fi
 else
-    echo -e "${YELLOW}⚠ 小智未启用，跳过模型检查和关键词预生成${NC}"
+    echo -e "${YELLOW}⚠ 小智和 OpenClaw 均未启用，跳过模型检查和关键词预生成${NC}"
 fi
 
 # 4. 检查配置

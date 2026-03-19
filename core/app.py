@@ -154,12 +154,17 @@ class MainApp:
         main_loop_thread.daemon = True
         main_loop_thread.start()
 
-        # Start audio services (only if XiaoZhi enabled, otherwise managed by XiaoAI)
-        if self._enable_xiaozhi:
+        # Start audio services (if XiaoZhi or OpenClaw enabled, otherwise managed by XiaoAI)
+        if self._enable_xiaozhi or self._enable_openclaw:
             from core.services.audio.vad import VAD
             from core.services.audio.kws import KWS
             VAD.start()
             KWS.start()
+
+            # Pre-warm SenseVoice ASR model in background to avoid delay on first use
+            if self._enable_openclaw:
+                from core.services.audio.asr.sherpa import SherpaASR
+                threading.Thread(target=SherpaASR._ensure_loaded, daemon=True, name="asr-warmup").start()
 
     def _run_event_loop(self):
         """Run asyncio event loop in separate thread."""

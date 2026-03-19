@@ -1,0 +1,348 @@
+"""OpenClaw continuous conversation controller.
+
+After a custom wake word (e.g. "你好龙虾") triggers wakeup, this module
+drives a local VAD -> ASR -> OpenClaw -> TTS loop that runs independently
+of the XiaoZhi session state machine.
+
+Key design decisions:
+  - Uses its own asyncio.Future for waiting on VAD events so it never
+    conflicts with WakeupSessionManager.wait_next_step().
+  - Never calls abort_xiaoai() (which would break the FileMonitor).
+  - TTS playback is blocking (awaited), so the next listening round
+    only starts after the response has finished playing.
+"""
+
+import asyncio
+import os
+
+import open_xiaoai_server
+
+from core.openclaw import OpenClawManager
+from core.ref import get_speaker, get_vad
+from core.services.audio.asr.sherpa import SherpaASR
+from core.utils.config import ConfigManager
+
+_NOTIFY_SOUND_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "assets", "sounds", "tts_notify.mp3",
+)
+
+def _load_notify_sound() -> bytes | None:
+    """Decode tts_notify.mp3 to PCM at startup."""
+    if not os.path.isfile(_NOTIFY_SOUND_PATH):
+        return None
+    try:
+        with open(_NOTIFY_SOUND_PATH, "rb") as f:
+            mp3_data = f.read()
+        return open_xiaoai_server.decode_audio(mp3_data, format="mp3", sample_rate=24000)
+    except Exception:
+        return None
+
+_NOTIFY_PCM = _load_notify_sound()
+from core.utils.logger import logger
+
+
+class OpenClawConversationController:
+    """Manages multi-turn OpenClaw conversation via local VAD + ASR."""
+
+    def __init__(self):
+        self.config = ConfigManager.instance()
+        self.active = False
+
+        # Per-session asyncio.Future used to receive VAD events
+        self._vad_future: asyncio.Future | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    # ---- config helpers ----
+
+    def _cfg(self, key: str, default=None):
+        return self.config.get_app_config(f"openclaw.{key}", default)
+
+    @property
+    def exit_keywords(self) -> list[str]:
+        return self._cfg("exit_keywords", ["退出", "停止", "再见"])
+
+    @property
+    def timeout(self) -> int:
+        return int(self._cfg("timeout", 20))
+
+    # ---- public API ----
+
+    def is_active(self) -> bool:
+        return self.active
+
+    async def start(self):
+        """Enter OpenClaw conversation mode."""
+        if self.active:
+            logger.warning("[OpenClaw Conv] Already active, ignoring start()")
+            return
+        self.active = True
+        self._loop = asyncio.get_running_loop()
+
+        logger.info("🎙️ 进入 OpenClaw 连续对话模式", module="OpenClaw Conv")
+
+        try:
+            await self._conversation_loop()
+        except Exception as exc:
+            logger.error(
+                f"[OpenClaw Conv] Conversation loop error: {type(exc).__name__}: {exc}",
+                module="OpenClaw Conv",
+            )
+        finally:
+            self.stop()
+
+    def stop(self):
+        """Exit conversation mode and clean up."""
+        if not self.active:
+            return
+        self.active = False
+        self._cancel_vad_future()
+        logger.info("👋 退出 OpenClaw 连续对话模式", module="OpenClaw Conv")
+
+    # ---- conversation loop ----
+
+    async def _conversation_loop(self):
+        """Run VAD -> ASR -> OpenClaw -> TTS turns until exit."""
+        vad = get_vad()
+
+        # Wait for any ongoing playback (e.g. before_wakeup "我在") to finish
+        # before starting the first listening round.
+        if vad:
+            await self._wait_for_silence(vad)
+
+        while self.active:
+            result = await self._run_one_turn()
+            if result in ("exit", "timeout"):
+                await self._call_after_wakeup()
+                break
+            elif result == "error":
+                break
+
+    async def _run_one_turn(self) -> str:
+        """Execute a single conversation turn.
+
+        Returns:
+            "continue" - turn completed, loop to next
+            "exit"     - user said an exit keyword
+            "timeout"  - no speech detected within timeout
+            "error"    - unrecoverable error
+        """
+        vad = get_vad()
+        if not vad:
+            logger.error("[OpenClaw Conv] VAD not available", module="OpenClaw Conv")
+            return "error"
+
+        # 1. Start listening for speech (recording is already active)
+        speech_bytes = await self._wait_for_speech(vad)
+        if speech_bytes is None:
+            return "timeout"
+
+        logger.debug(
+            f"[OpenClaw Conv] Got speech buffer: {len(speech_bytes)} bytes",
+            module="OpenClaw Conv",
+        )
+
+        # 2. ASR: convert speech to text
+        text = SherpaASR.asr(speech_bytes, sample_rate=16000)
+        if not text:
+            logger.info("[OpenClaw Conv] ASR returned empty, continue listening", module="OpenClaw Conv")
+            return "continue"
+
+        logger.info(f"💬 [OpenClaw Conv] User: {text}", module="OpenClaw Conv")
+
+        # 3. Check exit keywords
+        for kw in self.exit_keywords:
+            if kw in text:
+                logger.info(f"[OpenClaw Conv] Exit keyword detected: {kw}", module="OpenClaw Conv")
+                return "exit"
+
+        # 4. Send to OpenClaw and wait for response
+        response = await OpenClawManager.send_message(text, wait_response=True)
+        if response is None or response is False:
+            logger.warning("[OpenClaw Conv] OpenClaw returned no response", module="OpenClaw Conv")
+            speaker = get_speaker()
+            if speaker:
+                await speaker.play(text="抱歉，我没有收到回复")
+            return "continue"
+
+        logger.info(f"🤖 [OpenClaw Conv] OpenClaw: {response}", module="OpenClaw Conv")
+
+        # 5. Stop recording → TTS → Notify → Wait for silence → Start recording
+        #    Physical mute/unmute prevents echo; VAD silence check ensures
+        #    the speaker has truly gone quiet before we resume listening.
+        await self._stop_recording()
+        await self._play_tts(str(response))
+        await self._play_notify()
+        await self._start_recording()
+        await self._wait_for_silence(vad)
+
+        return "continue"
+
+    # ---- VAD integration ----
+
+    async def _wait_for_speech(self, vad) -> bytes | None:
+        """Use VAD to detect speech and collect complete utterance.
+
+        Follows the same two-step pattern as the XiaoZhi wakeup session:
+          1. resume("speech") → wait for on_speech (voice detected)
+          2. resume("silence") → keep recording → wait for on_silence (user stopped)
+
+        The audio stream is tapped between step 1 and 2 to capture the
+        full utterance that the VAD does not provide by itself.
+
+        Returns:
+            PCM bytes of captured speech, or None on timeout.
+        """
+        from core.wakeup_session import EventManager
+
+        self._vad_future = self._loop.create_future()
+        recording_frames: list[bytes] = []
+        is_recording = False
+
+        original_on_speech = EventManager.on_speech
+        original_on_silence = EventManager.on_silence
+
+        def _on_speech_hook(speech_buffer: bytes):
+            """Voice detected — save initial buffer, start recording, wait for silence."""
+            nonlocal is_recording
+            recording_frames.append(speech_buffer)
+            is_recording = True
+            # Now wait for silence to know user stopped speaking
+            vad.resume("silence")
+
+        def _on_silence_hook():
+            """Silence detected — stop recording and resolve."""
+            nonlocal is_recording
+            is_recording = False
+            if self._vad_future and not self._vad_future.done():
+                self._loop.call_soon_threadsafe(
+                    self._vad_future.set_result, b"".join(recording_frames)
+                )
+
+        # Tap into VAD's audio stream to record frames while waiting for silence
+        _orig_handle_speech = vad._handle_speech_frame
+        _orig_handle_silence = vad._handle_silence_frame
+
+        def _recording_speech_frame(frames):
+            if is_recording:
+                recording_frames.append(bytes(frames))
+            _orig_handle_speech(frames)
+
+        def _recording_silence_frame(frames):
+            if is_recording:
+                recording_frames.append(bytes(frames))
+            _orig_handle_silence(frames)
+
+        EventManager.on_speech = _on_speech_hook
+        EventManager.on_silence = _on_silence_hook
+        vad._handle_speech_frame = _recording_speech_frame
+        vad._handle_silence_frame = _recording_silence_frame
+
+        try:
+            vad.resume("speech")
+            result = await asyncio.wait_for(self._vad_future, timeout=self.timeout)
+            return result
+
+        except asyncio.TimeoutError:
+            logger.debug("[OpenClaw Conv] VAD timeout, no speech detected", module="OpenClaw Conv")
+            vad.pause()
+            return None
+
+        finally:
+            EventManager.on_speech = original_on_speech
+            EventManager.on_silence = original_on_silence
+            vad._handle_speech_frame = _orig_handle_speech
+            vad._handle_silence_frame = _orig_handle_silence
+            self._vad_future = None
+
+    def _cancel_vad_future(self):
+        """Cancel any pending VAD future."""
+        if self._vad_future and not self._vad_future.done():
+            self._loop.call_soon_threadsafe(self._vad_future.cancel)
+        self._vad_future = None
+
+    async def _wait_for_silence(self, vad):
+        """Wait until the environment is silent before starting to listen.
+
+        Uses VAD silence detection to confirm the speaker has stopped playing.
+        If speech is detected (e.g. TTS tail), keeps retrying silence detection.
+        """
+        from core.wakeup_session import EventManager
+
+        future = self._loop.create_future()
+        original_on_silence = EventManager.on_silence
+        original_on_speech = EventManager.on_speech
+
+        def _on_silence():
+            if not future.done():
+                self._loop.call_soon_threadsafe(future.set_result, True)
+
+        def _on_speech(_speech_buffer: bytes):
+            # Still hearing sound — switch back to silence detection
+            vad.resume("silence")
+
+        EventManager.on_silence = _on_silence
+        EventManager.on_speech = _on_speech
+        try:
+            vad.resume("silence")
+            await asyncio.wait_for(future, timeout=30)
+        except asyncio.TimeoutError:
+            vad.pause()
+        finally:
+            EventManager.on_speech = original_on_speech
+            EventManager.on_silence = original_on_silence
+
+    # ---- Recording control (physical mute/unmute via remote arecord) ----
+
+    async def _stop_recording(self):
+        """Kill the remote arecord process so the mic doesn't pick up TTS."""
+        try:
+            await open_xiaoai_server.stop_recording()
+            logger.debug("[OpenClaw Conv] Recording stopped", module="OpenClaw Conv")
+        except Exception as exc:
+            logger.debug(f"[OpenClaw Conv] stop_recording error: {exc}", module="OpenClaw Conv")
+
+    async def _start_recording(self):
+        """Restart the remote arecord process to resume mic input."""
+        try:
+            await open_xiaoai_server.start_recording()
+            logger.debug("[OpenClaw Conv] Recording started", module="OpenClaw Conv")
+        except Exception as exc:
+            logger.debug(f"[OpenClaw Conv] start_recording error: {exc}", module="OpenClaw Conv")
+
+    # ---- TTS ----
+
+    async def _play_tts(self, text: str):
+        """Play text via Doubao TTS (blocks until playback finishes)."""
+        try:
+            await OpenClawManager._play_response_with_tts(text)
+        except Exception as exc:
+            logger.error(
+                f"[OpenClaw Conv] TTS playback error: {exc}",
+                module="OpenClaw Conv",
+            )
+            speaker = get_speaker()
+            if speaker:
+                await speaker.play(text=text)
+
+    async def _play_notify(self):
+        """Play the listening-ready notification sound via PCM buffer."""
+        if not _NOTIFY_PCM:
+            return
+        speaker = get_speaker()
+        if speaker:
+            try:
+                await speaker.play(buffer=_NOTIFY_PCM)
+                # Wait for playback to finish: PCM is int16 at 24000Hz
+                duration = len(_NOTIFY_PCM) / (24000 * 2)
+                await asyncio.sleep(duration)
+            except Exception as exc:
+                logger.debug(f"[OpenClaw Conv] Notify sound error: {exc}", module="OpenClaw Conv")
+
+    async def _call_after_wakeup(self):
+        """Call the user-defined after_wakeup hook with source='openclaw'."""
+        after_wakeup = self.config.get_app_config("wakeup.after_wakeup")
+        if after_wakeup:
+            speaker = get_speaker()
+            if speaker:
+                await after_wakeup(speaker, source="openclaw")

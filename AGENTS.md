@@ -11,7 +11,7 @@ open-xiaoai-bridge/
 ├── config.py             # 用户配置文件（唤醒词、TTS、OpenClaw 等）
 ├── native/               # Rust 原生扩展源码（maturin 编译）
 │   ├── src/
-│   │   ├── lib.rs        # Rust Python 扩展入口
+│   │   ├── lib.rs        # Rust Python 扩展入口（含 stop/start_recording RPC）
 │   │   ├── server.rs     # 音频服务实现
 │   │   ├── python.rs     # PyO3 Python 绑定
 │   │   └── tts/          # TTS 音频处理（流式/非流式、PCM 直通、延迟测试接口）
@@ -22,17 +22,28 @@ open-xiaoai-bridge/
 │   ├── xiaoai_conversation.py # XiaoAIConversationController: 小爱连续对话策略
 │   ├── xiaozhi.py        # XiaoZhi: 小智 AI WebSocket 协议
 │   ├── openclaw.py       # OpenClawManager: OpenClaw 网关连接
+│   ├── openclaw_conversation.py # OpenClawConversationController: OpenClaw 连续对话
 │   ├── ref.py            # 全局状态管理（get/set）
 │   ├── wakeup_session.py # WakeupSessionManager: 小智唤醒会话状态机
+│   ├── assets/           # 静态资源
+│   │   └── sounds/       # 音效文件（tts_notify.mp3 等）
 │   ├── services/         # 服务层
 │   │   ├── speaker.py    # SpeakerManager: 音箱控制（播放/TTS/唤醒）
 │   │   ├── api_server.py # HTTP API 服务（远程控制）
 │   │   ├── audio/        # 音频处理
+│   │   │   ├── asr/      # 离线语音识别（SherpaASR / SenseVoice）
 │   │   │   ├── kws/      # 关键词唤醒（Sherpa）
 │   │   │   ├── vad/      # 语音活动检测（Silero）
 │   │   │   ├── stream.py # 全局音频流管理
 │   │   │   └── codec.py  # 音频编解码
+│   │   ├── tts/          # TTS 服务
+│   │   │   └── doubao.py # Doubao TTS 客户端
 │   │   └── protocols/    # 通信协议
+│   ├── models/           # 模型文件目录（.gitignore 排除）
+│   │   ├── *.onnx        # KWS / VAD 模型
+│   │   ├── tokens.txt    # KWS tokens
+│   │   ├── keywords.txt  # 自定义唤醒词
+│   │   └── sherpa-onnx-sense-voice-*/ # SenseVoice ASR 模型（需手动下载）
 │   └── utils/            # 工具类
 └── skills/               # AI Agent 工具技能
     └── xiaoai-tts/       # 通过 HTTP API 控制小爱音箱播放语音
@@ -89,6 +100,24 @@ OpenClaw 网关客户端：
 - `client.id`: 必须是 OpenClaw 预定义常量（如 "gateway-client"）
 - `client.mode`: 必须是预定义常量（如 "backend"）
 
+### 4b. OpenClawConversationController (openclaw_conversation.py)
+OpenClaw 连续对话控制器，唤醒词触发后进入独立的 VAD → ASR → OpenClaw → TTS 循环：
+- 使用 SherpaASR（SenseVoice 模型）做本地离线语音识别
+- VAD 两步检测：先检测语音开始（on_speech），再等待语音结束（on_silence），中间 hook VAD 帧录制完整语音
+- TTS 播放时通过 `stop_recording` / `start_recording` RPC 控制远端 arecord 进程（物理静音防回声）
+- 播放后用 `_wait_for_silence` (VAD) 确认环境安静再恢复监听
+- 支持退出关键词、超时退出、提示音
+
+**回声防护的两层机制**:
+1. `stop_recording` → kill 远端 arecord → 麦克风物理静音（音箱上有效）
+2. `_wait_for_silence` → VAD 检测环境安静（本地调试也有效的兜底方案）
+
+### 4c. SherpaASR (services/audio/asr/sherpa.py)
+离线语音识别，基于 sherpa-onnx SenseVoice 模型：
+- 模型目录自动扫描 `core/models/` 下的 `sherpa-onnx-sense-voice-*` 子目录
+- 惰性加载：首次调用 `asr()` 时才加载模型
+- 输入：PCM int16 bytes；输出：识别文本
+
 ### 5. SpeakerManager (services/speaker.py)
 音箱控制接口：
 - `play(text/url/buffer)`: 播放文字/链接/音频流
@@ -117,7 +146,7 @@ OpenClaw 网关客户端：
 
 ### 8. Rust 原生扩展 (native/)
 通过 [maturin](https://www.maturin.rs/) 编译的 Rust Python 扩展，提供高性能底层服务：
-- `lib.rs`: 扩展入口，使用 PyO3 绑定
+- `lib.rs`: 扩展入口，使用 PyO3 绑定；暴露 `stop_recording()` / `start_recording()` RPC 用于远程控制音箱麦克风
 - `server.rs`: WebSocket 音频服务器（端口 4399）
 - `python.rs`: Python API 暴露（`open_xiaoai_server` 模块）
 - `tts/`: TTS 音频处理模块（HTTP 流式请求、MP3 解码、PCM 直通、流式缓冲、延迟测试接口）
@@ -146,7 +175,6 @@ APP_CONFIG = {
         "token": "",                  # OpenClaw 认证令牌
         "session_key": "main",        # OpenClaw session 标识（仅从 config.py 读取）
         "tts_enabled": False,         # 启用 Doubao TTS 播放 OpenClaw 回复
-        "blocking_playback": False,   # TTS 播放是否阻塞等待完成（默认非阻塞）
         "ack_timeout": 30,            # 等待 OpenClaw accepted 回执的超时时间（秒）
         "response_timeout": 120,      # 等待 Agent 完整回复的超时时间（秒）
         # "tts_speaker": "...",       # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
@@ -234,7 +262,16 @@ MainApp.instance(enable_xiaozhi=True)
 await app.send_to_openclaw("用户指令")
 ```
 
-### 模式 4: 混合模式
+### 模式 4: OpenClaw 连续对话模式
+```python
+# XIAOZHI_ENABLE=1 + OPENCLAW_ENABLED=1
+# config.py 的 before_wakeup 中:
+#   if "龙虾" in text: return "openclaw"
+# 唤醒词触发后进入本地 VAD → ASR → OpenClaw → TTS 循环
+# 说"退出"/"停止"/"再见"退出对话
+```
+
+### 模式 5: 混合模式
 ```python
 # XIAOZHI_ENABLE=1 + OPENCLAW_ENABLED=1
 # - "你好小智" -> 唤醒小智 AI

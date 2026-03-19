@@ -59,5 +59,5 @@ ENV LD_LIBRARY_PATH=/app/.venv/lib/python3.12/site-packages/onnxruntime/capi
 # 暴露 API 服务器端口
 EXPOSE 9092
 
-# 先初始化关键词模型，然后启动主程序
-CMD ["/bin/bash", "-c", "source /app/.venv/bin/activate && python core/services/audio/kws/keywords.py && python main.py"]
+# 先初始化关键词模型（小智或 OpenClaw 启用时），然后启动主程序
+CMD ["/bin/bash", "-c", "source /app/.venv/bin/activate && if [[ \"${XIAOZHI_ENABLE:-}\" =~ ^(1|true|yes)$ ]] || [[ \"${OPENCLAW_ENABLED:-}\" =~ ^(1|true|yes)$ ]]; then python core/services/audio/kws/keywords.py; fi && python main.py"]

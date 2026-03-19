@@ -195,15 +195,25 @@ pub fn tts_stream_play(
             crate::pylog!("[TTS] Stream fetch error: {}", e);
         }
 
+        let total_ms = started_at.elapsed().as_millis();
+        let playback_duration_ms = total_pcm_bytes as u128 * 1000 / (sample_rate as u128 * 2);
+        let remaining_ms = playback_duration_ms.saturating_sub(total_ms);
+
         crate::pylog!(
-            "[TTS] Stream summary: format={}, first_chunk={} ms, playback_start={} ms, total={} ms, encoded={} bytes, pcm={} bytes",
+            "[TTS] Stream summary: format={}, first_chunk={} ms, playback_start={} ms, total={} ms, encoded={} bytes, pcm={} bytes, remaining={} ms",
             format,
             first_audio_chunk_ms.unwrap_or(0),
             playback_started_ms.unwrap_or(0),
-            started_at.elapsed().as_millis(),
+            total_ms,
             total_encoded_bytes,
-            total_pcm_bytes
+            total_pcm_bytes,
+            remaining_ms,
         );
+
+        if remaining_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(remaining_ms as u64)).await;
+        }
+
         Ok(())
     })
 }
@@ -243,15 +253,25 @@ pub fn tts_play(
 
         send_pcm(pcm).await;
 
+        let total_ms = started_at.elapsed().as_millis();
+        let playback_duration_ms = pcm_len as u128 * 1000 / (sample_rate as u128 * 2);
+        let remaining_ms = playback_duration_ms.saturating_sub(total_ms);
+
         crate::pylog!(
-            "[TTS] Non-stream summary: format={}, fetch={} ms, pcm_ready={} ms, total={} ms, encoded={} bytes, pcm={} bytes",
+            "[TTS] Non-stream summary: format={}, fetch={} ms, pcm_ready={} ms, total={} ms, encoded={} bytes, pcm={} bytes, remaining={} ms",
             format,
             fetch_completed_ms,
             pcm_ready_ms,
-            started_at.elapsed().as_millis(),
+            total_ms,
             encoded_audio_len,
-            pcm_len
+            pcm_len,
+            remaining_ms,
         );
+
+        if remaining_ms > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(remaining_ms as u64)).await;
+        }
+
         Ok(())
     })
 }

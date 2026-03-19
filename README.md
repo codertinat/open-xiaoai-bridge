@@ -346,7 +346,6 @@ APP_CONFIG = {
         "session_key": "main",  # 会话标识
         "identity_path": "/app/openclaw/identity/device.json",  # 设备身份文件路径（容器部署建议持久化）
         "tts_enabled": False,  # 启用 Doubao TTS 播放 OpenClaw 回复
-        "blocking_playback": False,  # TTS 播放是否阻塞等待完成 (默认 False)
         "ack_timeout": 30,  # 发送消息时等待 OpenClaw accepted 回执的超时时间（秒）
         "tts_speaker": "zh_female_cancan_mars_bigtts",  # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
     },
@@ -625,24 +624,6 @@ xiaoai-tts tts "你好" -s S_xxxxxxxx
 ```
 
 > 说明：`S_` 前缀的音色是通过声音复刻 2.0 模型训练的用户自定义音色，系统会自动匹配正确的 resource\_id，无需额外配置。
-
-#### Q：TTS 播放是阻塞还是非阻塞的？
-
-默认使用**非阻塞方式**（`blocking_playback: False`），即启动播放后立即返回。如果你想改为阻塞方式，可以设置：
-
-```python
-APP_CONFIG = {
-    "openclaw": {
-        "tts_enabled": True,
-        "blocking_playback": True,  # 阻塞播放
-    },
-}
-```
-
-**区别**：
-
-- **非阻塞模式**（默认）：启动播放后立即返回，可能被后续的音频指令打断
-- **阻塞模式**：播放完成后才继续执行，不会被其他音频打断
 
 #### Q：`app.send_to_openclaw(..., wait_response=False)` 返回 `True` 代表什么？
 

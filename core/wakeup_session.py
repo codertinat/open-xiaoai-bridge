@@ -227,8 +227,33 @@ class WakeupSessionManager:
         if kws:
             kws.resume()
         logger.info(f"[Wakeup] before_wakeup returned: {should_wakeup}")
-        if should_wakeup:
+        if should_wakeup == "openclaw":
+            await self._start_openclaw_conversation()
+        elif should_wakeup:
             self.on_wakeup()
+
+    async def _start_openclaw_conversation(self):
+        """Start an OpenClaw continuous conversation session.
+
+        This runs independently of the XiaoZhi session state machine.
+        KWS is paused during the conversation and resumed when done.
+        """
+        from core.openclaw_conversation import OpenClawConversationController
+
+        kws = get_kws()
+        if kws:
+            kws.pause()
+        try:
+            controller = OpenClawConversationController()
+            await controller.start()
+        except Exception as exc:
+            logger.error(
+                f"[Wakeup] OpenClaw conversation failed: {type(exc).__name__}: {exc}",
+                module="Wakeup",
+            )
+        finally:
+            if kws:
+                kws.resume()
 
 
 EventManager = WakeupSessionManager()

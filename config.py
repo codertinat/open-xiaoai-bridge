@@ -14,11 +14,20 @@ async def before_wakeup(speaker, text, source, xiaozhi, xiaoai, app):
     - source: 唤醒来源
         - 'kws': 关键字唤醒
         - 'xiaoai': 小爱同学收到用户指令
+
+    返回值:
+        - True / "xiaozhi": 走小智流程
+        - "openclaw": 走 OpenClaw 连续对话流程
+        - False / None: 不处理
     """
     if source == "kws":
-        # 播放唤醒提示语
+        # Check if the keyword matches an OpenClaw wake word
+        if "龙虾" in text:
+            await speaker.play(text="我在")
+            return "openclaw"
+
+        # Default: wake up XiaoZhi
         await speaker.play(text="小智来了")
-        # 唤醒小智 AI
         return True
 
     if source == "xiaoai":
@@ -45,11 +54,18 @@ async def before_wakeup(speaker, text, source, xiaozhi, xiaoai, app):
             return True
 
 
-async def after_wakeup(speaker):
+async def after_wakeup(speaker, source="xiaozhi"):
     """
     退出唤醒状态
+
+    - source: 退出来源
+        - 'xiaozhi': 小智对话超时退出
+        - 'openclaw': OpenClaw 连续对话退出
     """
-    await speaker.play(url="http://127.0.0.1:8080/bye.wav")
+    if source == "openclaw":
+        await speaker.play(text="好的，再见")
+    else:
+        await speaker.play(url="http://127.0.0.1:8080/bye.wav")
 
 APP_CONFIG = {
     "wakeup": {
@@ -57,7 +73,9 @@ APP_CONFIG = {
         "keywords": [
             "你好小智",
             "小智小智",
-            "hi siri"
+            "hi siri",
+            "你好龙虾",
+            "龙虾你好",
         ],
         # 静音多久后自动退出唤醒（秒）
         "timeout": 20,
@@ -115,5 +133,8 @@ APP_CONFIG = {
         "tts_speed": 1.0,  # TTS 语速 (0.5-2.0, 1.0 为正常语速)
         "tts_speaker": "zh_female_vv_uranus_bigtts",  # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
         "response_timeout": 120,  # 等待 OpenClaw agent 响应的超时时间（秒）
+        # OpenClaw 连续对话配置
+        "exit_keywords": ["退出", "停止", "再见"],  # 退出连续对话的关键词
+        "timeout": 20,  # 静音多久后自动退出对话（秒）
     },
 }

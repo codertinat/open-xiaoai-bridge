@@ -11,7 +11,6 @@ Configuration:
                 "session_key": "main",
                 "identity_path": "~/.openclaw/identity/device.json",
                 "tts_enabled": False,  # Enable Doubao TTS to play OpenClaw responses
-                "blocking_playback": False,  # Non-blocking by default
                 "ack_timeout": 30,  # Seconds to wait for accepted ack
                 "response_timeout": 120,  # Seconds to wait for agent response
             }
@@ -74,7 +73,6 @@ class OpenClawManager:
     # Config
     _enabled = False
     _tts_enabled = False  # Enable Doubao TTS to play OpenClaw responses
-    _blocking_playback = False  # Whether to use blocking playback (wait for audio to finish)
     _tts_speaker = None  # Custom speaker for OpenClaw TTS (uses tts.doubao.default_speaker if not set)
     _tts_speed = 1.0  # TTS speed (0.5-2.0, 1.0 is normal)
     _url = None
@@ -126,7 +124,6 @@ class OpenClawManager:
         cfg_session = config.get("session_key", "main")
         cfg_identity_path = config.get("identity_path")
         cfg_tts_enabled = config.get("tts_enabled", False)
-        cfg_blocking_playback = config.get("blocking_playback", False)
         cfg_tts_speaker = config.get("tts_speaker", None)
         cfg_tts_speed = config.get("tts_speed", 1.0)
         cfg_ack_timeout = config.get("ack_timeout", 30)
@@ -144,7 +141,6 @@ class OpenClawManager:
 
         # TTS config: only from config file
         cls._tts_enabled = cfg_tts_enabled
-        cls._blocking_playback = cfg_blocking_playback
         cls._tts_speaker = cfg_tts_speaker
         cls._tts_speed = cfg_tts_speed
         cls._ack_timeout = cfg_ack_timeout
@@ -159,8 +155,7 @@ class OpenClawManager:
             logger.info(f"[OpenClaw] Enabled, will connect to {cls._url}")
             logger.info(f"[OpenClaw] Device identity path: {cls._identity_path}")
             if cls._tts_enabled:
-                mode = "blocking" if cls._blocking_playback else "non-blocking"
-                logger.info(f"[OpenClaw] TTS playback enabled ({mode} mode) - OpenClaw responses will be played via Doubao TTS")
+                logger.info("[OpenClaw] TTS playback enabled - OpenClaw responses will be played via Doubao TTS")
 
         should_reconnect = cls._connected and (
             previous_url != cls._url
@@ -892,16 +887,13 @@ class OpenClawManager:
 
             if not app_id or not access_key:
                 logger.error("[OpenClaw] Doubao TTS credentials not configured, cannot play response")
-                # Fallback to native TTS
                 speaker = get_speaker()
                 if speaker:
-                    await speaker.play(text=text, blocking=cls._blocking_playback)
+                    await speaker.play(text=text, blocking=True)
                 return
 
-            # Use custom speaker if configured, otherwise fall back to default
             speaker_id = cls._tts_speaker or tts_config.get("default_speaker", "zh_female_xiaohe_uranus_bigtts")
 
-            # Create TTS instance
             tts = DoubaoTTS(
                 app_id=app_id,
                 access_key=access_key,
@@ -909,7 +901,6 @@ class OpenClawManager:
             )
             resolved_format = tts.resolve_audio_format(text)
 
-            # Stream synthesis and play chunks as they arrive (or fallback to non-stream)
             use_stream = tts_config.get("stream", False)
             speaker = get_speaker()
             if not speaker:
@@ -949,12 +940,11 @@ class OpenClawManager:
 
         except Exception as e:
             logger.error(f"[OpenClaw] Error playing response with TTS: {e}")
-            # Fallback to native TTS on error
             try:
                 from core.ref import get_speaker
                 speaker = get_speaker()
                 if speaker:
-                    await speaker.play(text=text, blocking=cls._blocking_playback)
+                    await speaker.play(text=text, blocking=True)
             except Exception as fallback_error:
                 logger.error(f"[OpenClaw] Fallback TTS also failed: {fallback_error}")
 

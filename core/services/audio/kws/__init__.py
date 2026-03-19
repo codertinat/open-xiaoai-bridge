@@ -81,14 +81,14 @@ class _KWS:
                 continue
 
             # 在说话和监听状态时，暂停 KWS
+            xiaozhi = get_xiaozhi()
             if (
                 not frames
                 or self.paused
-                or get_xiaozhi().device_state
-                in [
-                    DeviceState.LISTENING,
-                    DeviceState.SPEAKING,
-                ]
+                or (
+                    xiaozhi and xiaozhi.device_state
+                    in [DeviceState.LISTENING, DeviceState.SPEAKING]
+                )
             ):
                 time.sleep(0.01)
                 continue
