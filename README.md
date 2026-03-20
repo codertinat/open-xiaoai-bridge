@@ -4,6 +4,8 @@
 
 打破小爱音箱的封闭生态，灵活接入多种 AI 服务，提供 HTTP API 实现远程控制。
 
+[![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![Rust](https://img.shields.io/badge/Rust-native_module-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![GitHub Stars](https://img.shields.io/github/stars/coderzc/open-xiaoai-bridge?style=flat&logo=github)](https://github.com/coderzc/open-xiaoai-bridge/stargazers) [![Docker Image](https://img.shields.io/badge/ghcr.io-open--xiaoai--bridge-2496ed?logo=docker&logoColor=white)](https://ghcr.io/coderzc/open-xiaoai-bridge) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20macOS-lightgrey)](https://github.com/coderzc/open-xiaoai-bridge)
+
 > 本项目由 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 的 `examples/xiaozhi/` 演进而来，已成为独立项目。
 
 **演示视频：** <https://www.bilibili.com/video/BV1DHcBz1Ex7>
@@ -12,10 +14,10 @@
 
 | 功能 | 说明 |
 |------|------|
-| 🦞 **OpenClaw 集成** | 接入 [OpenClaw](https://github.com/openclaw/openclaw)，支持连续对话和豆包 TTS 播放 |
+| 🦞 **OpenClaw 集成** | 接入 [OpenClaw](https://github.com/openclaw/openclaw)，支持连续对话，可选豆包 TTS 或小爱原生 TTS |
 | 🤖 **小智 AI 集成** | 接入 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) |
 | 🎙️ **自定义唤醒词** | 支持中英文，不同唤醒词可路由到不同 AI 服务 |
-| 💬 **连续对话** | 多轮对话无需反复唤醒，支持随时打断 |
+| 💬 **连续对话** | 多轮对话无需反复唤醒，喊"小爱同学"可随时打断 |
 | ⚡ **VAD + KWS** | 语音活动检测前置，减少无效识别，更省电 |
 | 🌐 **HTTP API** | 远程播放文字/音频、控制音箱 |
 | 🧩 **模块化** | 各功能独立开关，按需启用 |
@@ -178,14 +180,14 @@ flowchart TB
 ```
 小爱指令 "让龙虾 xxx" → before_wakeup() → send_to_openclaw()
 → OpenClawManager → Gateway → Agent
-→ 服务端自动 TTS 或 Agent 主动调用 xiaoai-tts skill
+→ 自动 TTS 播报 或 Agent 主动调用 xiaoai-tts skill
 ```
 
 **OpenClaw 连续对话**
 
 ```
 唤醒词 "你好龙虾" → WakeupSessionManager → OpenClawConversationController
-→ 循环: VAD 检测语音 → SherpaASR 离线识别 → OpenClaw → Doubao TTS 播放
+→ 循环: VAD 检测语音 → SherpaASR 离线识别 → OpenClaw → TTS 播放
 → 说"退出"/"再见"退出
 ```
 
@@ -301,39 +303,135 @@ curl -X POST http://localhost:9092/api/interrupt
 
 ## OpenClaw 集成
 
-通过 [OpenClaw](https://github.com/openclaw/openclaw) 接入外部 AI Agent，支持两种工作模式：
+通过 [OpenClaw](https://github.com/openclaw/openclaw) 将小爱音箱变成你的 AI Agent 终端。
 
-### 代理模式（单次转发）
+### 三种交互方式
 
-小爱收到特定指令后转发给 OpenClaw Agent，Agent 处理完毕后回复。
+#### 🎙️ 连续对话
 
-### 连续对话模式
+用自定义唤醒词触发后进入多轮对话循环，全程本地处理，不依赖小爱 ASR：
 
-唤醒词触发后进入本地 VAD → ASR → OpenClaw → TTS 循环，支持多轮对话。
+```
+唤醒词 "你好龙虾" → 提示音 → 你说话 → [VAD检测] → [本地ASR识别] → OpenClaw Agent → [TTS播报] → 提示音 → 你继续说 → ...
+```
 
-### TTS 回复方式
+- 说"退出"或"再见"退出对话
+- 小爱唤醒时自动打断 TTS 并退出
+- 退出关键词可自定义
 
-由调用方决定是否播报，在 `before_wakeup` 中选择不同方法：
+触发方式见下方[自定义唤醒词](#自定义唤醒词)，`before_wakeup` 返回 `"openclaw"` 即进入连续对话。
 
-| 方法 | 行为 | 适用场景 |
-|------|------|----------|
-| `app.send_to_openclaw(text)` | 只发送，不播报 | Agent 自己调用 `xiaoai-tts` skill 播报 |
-| `app.send_to_openclaw_and_play_reply(text)` | 发送 + 豆包 TTS 自动播报 | 简单代理，固定音色 |
+#### 💬 单次对话（发送并播报）
 
-### 配置
+通过小爱语音指令发送一条消息给 Agent，收到回复后自动 TTS 播报：
+
+```python
+# config.py 中的 before_wakeup
+if "让龙虾" in text:
+    await speaker.abort_xiaoai()
+    await app.send_to_openclaw_and_play_reply(text.replace("让龙虾", ""))
+    return None  # 框架不做额外处理
+```
+
+用户说"让龙虾查一下明天天气" → 打断小爱 → 发给 Agent → TTS 播报回复。
+
+#### 📡 单次对话（Agent 自主播报）
+
+只发送消息，不自动播报，由 Agent 自己决定何时、如何回复（例如通过 `xiaoai-tts` skill 调用 HTTP API 播报）：
+
+```python
+if "告诉龙虾" in text:
+    await speaker.abort_xiaoai()
+    await app.send_to_openclaw(text.replace("告诉龙虾", ""))
+    return None
+```
+
+适合 Agent 需要做复杂处理后再决定是否/如何播报的场景。
+
+### 自定义唤醒词
+
+唤醒词在 `config.py` 的 `wakeup.keywords` 中定义，支持中英文混合：
+
+```python
+"wakeup": {
+    "keywords": [
+        "你好小智",        # 中文
+        "小智小智",
+        "hi openclaw",    # 英文（全小写）
+        "你好龙虾",
+        "龙虾你好",
+    ],
+},
+```
+
+不同唤醒词可以路由到不同 AI 服务，在 `before_wakeup` 中根据文本内容判断：
+
+```python
+async def before_wakeup(speaker, text, source, app):
+    if source == "kws":          # 唤醒词触发
+        if "龙虾" in text:
+            await speaker.play(text="龙虾来了")
+            return "openclaw"    # → OpenClaw 连续对话
+        if "小智" in text:
+            await speaker.play(text="小智来了")
+            return "xiaozhi"     # → 小智 AI
+        return None              # → 不处理
+
+    if source == "xiaoai":       # 小爱语音指令
+        if text == "召唤龙虾":
+            await speaker.abort_xiaoai()
+            return "openclaw"
+        if text == "召唤小智":
+            await speaker.abort_xiaoai()
+            return "xiaozhi"
+    # 返回 None → 交给小爱原生处理
+```
+
+> **返回值含义：** `"openclaw"` → 连续对话，`"xiaozhi"` → 小智 AI，`None` → 不处理（用户可自行调用 `app.send_to_openclaw()` 等方法）
+
+### rule_prompt — 约束 Agent 输出格式
+
+`rule_prompt` 会自动追加到每条发给 Agent 的消息末尾，用于约束输出格式。
+因为音箱场景只能播语音，需要告诉 Agent 不要返回 markdown、代码块等无法朗读的内容：
+
+```python
+"openclaw": {
+    "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
+},
+```
+
+Agent 收到的实际消息：
+```
+查一下明天天气
+注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内
+```
+
+不需要可以留空或不设置。
+
+### 完整配置
 
 ```python
 APP_CONFIG = {
+    "wakeup": {
+        "keywords": ["你好小智", "你好龙虾"],  # 自定义唤醒词
+        "timeout": 20,                          # 静音多久后退出唤醒（秒）
+        "before_wakeup": before_wakeup,         # 唤醒路由回调
+        "after_wakeup": after_wakeup,           # 退出唤醒回调
+    },
+    "kws": {
+        "keywords_score": 2.0,      # 唤醒词置信度加成（越高越难误触发）
+        "keywords_threshold": 0.2,  # 检测阈值（越低越灵敏）
+    },
     "openclaw": {
-        "url": "ws://127.0.0.1:18789",           # Gateway 地址
-        "token": "your_token",                     # 认证令牌
-        "session_key": "agent:main:open-xiaoai-bridge",  # 会话标识
+        "url": "ws://127.0.0.1:18789",                    # Gateway 地址
+        "token": "your_token",                              # 认证令牌
+        "session_key": "agent:main:open-xiaoai-bridge",     # 会话标识
         "identity_path": "/app/openclaw/identity/device.json",  # 设备身份文件
-        "tts_speed": 1.0,                          # 语速 (0.5-2.0)
-        "tts_speaker": "zh_female_vv_uranus_bigtts",  # 音色（可选）
-        "response_timeout": 120,                   # 响应超时（秒）
-        "exit_keywords": ["退出", "停止", "再见"],   # 连续对话退出关键词
-        # "rule_prompt": "注意：纯文字，不要 markdown，300字以内",
+        "tts_speed": 1.0,                                  # 语速 (0.5-2.0)，仅豆包 TTS 生效
+        "tts_speaker": "xiaoai",                              # 音色（见下方 TTS 音色说明）
+        "response_timeout": 120,                            # Agent 响应超时（秒）
+        "exit_keywords": ["退出", "停止", "再见"],           # 连续对话退出关键词
+        "rule_prompt": "注意：纯文字，不要 markdown，300字以内",  # 输出格式约束（可选）
     },
     "tts": {
         "doubao": {
@@ -341,36 +439,26 @@ APP_CONFIG = {
             "access_key": "your_access_key",
             "default_speaker": "zh_female_vv_uranus_bigtts",
             "stream": True,           # 流式播放（推荐）
-            "audio_format": "pcm",    # 推荐：局域网环境首音更快
+            "audio_format": "pcm",    # 局域网推荐，首音更快
         }
     },
 }
 ```
 
-### 唤醒路由（config.py）
+### OpenClaw TTS 音色
 
-`before_wakeup` 钩子的返回值决定走哪条链路：
+`openclaw.tts_speaker` 支持两种值：
 
-```python
-async def before_wakeup(speaker, text, source, app):
-    if source == "kws":
-        if "龙虾" in text:
-            await speaker.play(text="龙虾来了")
-            return "openclaw"      # → OpenClaw 连续对话
-        await speaker.play(text="小智来了")
-        return "xiaozhi"           # → 小智 AI
+| 值 | 效果 | 说明 |
+|---|---|---|
+| `"xiaoai"` | 小爱原生 TTS | 零配置即可使用，音色由设备决定 |
+| 豆包音色 ID | 豆包语音合成 | 需配置 `tts.doubao` 的 `app_id` 和 `access_key`，支持 500+ 音色 |
 
-    if source == "xiaoai":
-        if text == "召唤龙虾":
-            await speaker.abort_xiaoai()
-            return "openclaw"      # → OpenClaw 连续对话
-        if text == "召唤小智":
-            await speaker.abort_xiaoai()
-            return "xiaozhi"       # → 小智 AI
-    # 返回 None → 不处理，交给小爱原生
-```
+豆包音色 ID 示例：`"zh_female_vv_uranus_bigtts"`（Vivi 2.0）、`"S_xxxxxxxx"`（克隆音色）。完整列表见[火山引擎文档](https://www.volcengine.com/docs/6561/1257544)。
 
-### 容器部署注意
+> 不设置 `tts_speaker` 时，默认使用 `tts.doubao.default_speaker` 的豆包音色。
+
+### 容器部署
 
 挂载 `identity_path` 目录为持久化卷，否则容器重建后需要重新配对设备：
 
@@ -468,9 +556,7 @@ volumes:
 <details>
 <summary>首次连接出现 pairing required？</summary>
 
-正常流程。保持服务在线，到 OpenClaw UI 批准设备：**Nodes → Devices → Approve**。
-
-容器部署记得挂载 `identity_path` 目录，否则重建后需要再次批准。
+正常流程。保持服务在线，到 OpenClaw UI 批准设备：**Nodes → Devices → Approve**。容器部署注意事项见[容器部署](#容器部署)。
 </details>
 
 <details>
@@ -485,22 +571,6 @@ volumes:
 - `send_to_openclaw(text)` → 成功返回 `run_id`（str），失败返回 `None`
 - `send_to_openclaw(text, wait_response=True)` → 成功返回回复文本，超时/失败返回 `None`
 - `send_to_openclaw_and_play_reply(text)` → 同上，但会自动 TTS 播放回复
-</details>
-
-<details>
-<summary>如何为 OpenClaw 设置不同的 TTS 音色？</summary>
-
-通过 `tts_speaker` 为 OpenClaw 设置独立音色：
-
-```python
-APP_CONFIG = {
-    "openclaw": {
-        "tts_speaker": "zh_female_cancan_mars_bigtts",
-    },
-}
-```
-
-可用音色：`/api/tts/doubao_voices` 或 [豆包文档](https://www.volcengine.com/docs/6561/1257544)。
 </details>
 
 <details>

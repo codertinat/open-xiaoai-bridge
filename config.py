@@ -130,8 +130,8 @@ APP_CONFIG = {
         "token": "your_openclaw_token",  # OpenClaw 认证令牌
         "session_key": "agent:main:open-xiaoai-bridge", # 会话标识
         "identity_path": "/app/openclaw/identity/device.json",  # 设备身份文件路径；容器部署时建议挂载持久化目录
-        "tts_speed": 1.0,  # TTS 语速 (0.5-2.0, 1.0 为正常语速)
-        "tts_speaker": "zh_female_vv_uranus_bigtts",  # 可选：自定义音色，不设置则使用 tts.doubao.default_speaker
+        "tts_speed": 1.0,  # TTS 语速 (0.5-2.0)，仅豆包 TTS 生效，小爱原生 TTS 不支持调速
+        "tts_speaker": "xiaoai",  # "xiaoai" = 小爱原生 TTS；填豆包音色 ID 则用豆包 TTS；不设置则使用 tts.doubao.default_speaker
         "response_timeout": 120,  # 等待 OpenClaw agent 响应的超时时间（秒）
         "exit_keywords": ["退出", "停止", "再见"],  # 退出连续对话的关键词
         # 每次发送消息时自动追加的指令后缀（约束规范，会自动在前面加换行符）

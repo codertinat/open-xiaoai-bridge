@@ -71,6 +71,7 @@ class OpenClawManager:
     _should_reconnect = False  # flag to indicate intentional disconnect vs unexpected
 
     # Config
+    XIAOAI_TTS_SPEAKER = "xiaoai"  # Special value: use XiaoAI native TTS instead of Doubao
     _enabled = False
     _tts_speaker = None  # Custom speaker for OpenClaw TTS (uses tts.doubao.default_speaker if not set)
     _tts_speed = 1.0  # TTS speed (0.5-2.0, 1.0 is normal)
@@ -486,7 +487,7 @@ class OpenClawManager:
             full_text = text
             if cls._rule_prompt:
                 full_text = text + "\n" + cls._rule_prompt
-            logger.user_speech(text, module="OpenClaw")
+            logger.user_speech(full_text, module="OpenClaw")
 
             loop = asyncio.get_running_loop()
             response_waiter = loop.create_future()
@@ -861,6 +862,14 @@ class OpenClawManager:
         """Synthesize text using Doubao TTS and play through speaker."""
         try:
             from core.ref import get_speaker
+
+            # Special value: use XiaoAI native TTS directly
+            if cls._tts_speaker == cls.XIAOAI_TTS_SPEAKER:
+                speaker = get_speaker()
+                if speaker:
+                    await speaker.play(text=text, blocking=True)
+                return
+
             from core.services.tts.doubao import DoubaoTTS
 
             # Get TTS config
@@ -869,7 +878,7 @@ class OpenClawManager:
             access_key = tts_config.get("access_key")
 
             if not app_id or not access_key:
-                logger.error("[OpenClaw] Doubao TTS credentials not configured, cannot play response")
+                logger.warning("[OpenClaw] Doubao TTS credentials not configured, falling back to xiaoai native tts")
                 speaker = get_speaker()
                 if speaker:
                     await speaker.play(text=text, blocking=True)
