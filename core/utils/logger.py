@@ -115,10 +115,10 @@ class XiaozhiLogger:
     
     def ai_response(self, text: str, module: str = "XiaoZhi"):
         """AI回复日志"""
-        if module == "XiaoZhi":
+        if module.startswith("XiaoZhi"):
           self.info(f"🤖 小智: {text}", module=module)
-        if module == "OpenClaw":
-          self.info(f"🦞 OpenClaw: {text}", module=module)  
+        elif module.startswith("OpenClaw"):
+          self.info(f"🦞 OpenClaw: {text}", module=module)
     
     def vad_event(self, event: str, details: str = "", module: str = "VAD"):
         """VAD事件日志"""

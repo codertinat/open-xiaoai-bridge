@@ -312,3 +312,14 @@ class MainApp:
         except Exception as e:
             logger.error(f"[MainApp] 发送消息到 OpenClaw 失败: {type(e).__name__}: {e}")
             return None
+
+    def set_openclaw_session_key(self, session_key: str):
+        """Override the OpenClaw session key at runtime.
+
+        Call this before sending a message or triggering a wakeup to route
+        the conversation to a different session.
+
+        Args:
+            session_key: New session key (e.g. "agent:user123:my-app").
+        """
+        OpenClawManager.set_session_key(session_key)

@@ -8,7 +8,7 @@ Configuration:
                 "enabled": True,
                 "url": "ws://localhost:4399",
                 "token": "your_token",
-                "session_key": "main",
+                "session_key": "agent:main:open-xiaoai-bridge",
                 "identity_path": "~/.openclaw/identity/device.json",
                 "ack_timeout": 30,  # Seconds to wait for accepted ack
                 "response_timeout": 120,  # Seconds to wait for agent response
@@ -122,7 +122,7 @@ class OpenClawManager:
         config = config_manager.get_app_config("openclaw", {})
         cfg_url = config.get("url", "ws://localhost:4399")
         cfg_token = config.get("token", "")
-        cfg_session = config.get("session_key", "main")
+        cfg_session = config.get("session_key", "agent:main:open-xiaoai-bridge")
         cfg_identity_path = config.get("identity_path")
         cfg_tts_speaker = config.get("tts_speaker", None)
         cfg_tts_speed = config.get("tts_speed", 1.0)
@@ -179,6 +179,19 @@ class OpenClawManager:
     def initialize(cls, enabled: bool | None = None):
         """Deprecated: Use initialize_from_config instead."""
         cls.initialize_from_config(enabled=enabled)
+
+    @classmethod
+    def set_session_key(cls, session_key: str):
+        """Override the session key at runtime.
+
+        This takes effect immediately for the next message sent.
+        It does NOT trigger a reconnect — the WebSocket connection is session-agnostic.
+
+        Args:
+            session_key: New session key to use (e.g. "agent:user123:my-app").
+        """
+        logger.info(f"[OpenClaw] Session key updated: {cls._session_key!r} → {session_key!r}")
+        cls._session_key = session_key
 
     @classmethod
     def _base64url_encode(cls, raw: bytes) -> str:
@@ -487,7 +500,7 @@ class OpenClawManager:
             full_text = text
             if cls._rule_prompt:
                 full_text = text + "\n" + cls._rule_prompt
-            logger.user_speech(full_text, module="OpenClaw")
+            logger.user_speech(full_text, module=f"OpenClaw({cls._session_key})")
 
             loop = asyncio.get_running_loop()
             response_waiter = loop.create_future()
@@ -836,7 +849,7 @@ class OpenClawManager:
                         # Agent run completed
                         response_text = cls._response_texts.get(run_id, "")
                         if run_id and response_text and run_id in cls._response_events:
-                            logger.ai_response(response_text, module="OpenClaw")
+                            logger.ai_response(response_text, module=f"OpenClaw({cls._session_key})")
                         cls._signal_response_ready(run_id)
 
         except Exception as e:

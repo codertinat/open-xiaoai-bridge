@@ -344,4 +344,5 @@ class OpenClawConversationController:
         if after_wakeup:
             speaker = get_speaker()
             if speaker:
-                await after_wakeup(speaker, source="openclaw")
+                from core.openclaw import OpenClawManager
+                await after_wakeup(speaker, source="openclaw", session_key=OpenClawManager._session_key)

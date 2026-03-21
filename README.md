@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776ab?logo=python&logoColor=white)](https://www.python.org/) [![Rust](https://img.shields.io/badge/Rust-native_module-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/) [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE) [![GitHub Stars](https://img.shields.io/github/stars/coderzc/open-xiaoai-bridge?style=flat&logo=github)](https://github.com/coderzc/open-xiaoai-bridge/stargazers) [![Docker Image](https://img.shields.io/badge/ghcr.io-open--xiaoai--bridge-2496ed?logo=docker&logoColor=white)](https://ghcr.io/coderzc/open-xiaoai-bridge)
 
-[![New](https://img.shields.io/badge/🎉_新功能-OpenClaw_支持_自定义唤醒词_|_连续对话_|_克隆音色_|_流式播放-f97316)](https://github.com/coderzc/open-xiaoai-bridge/releases)
+[![New](https://img.shields.io/badge/🎉_新功能-OpenClaw_支持_自定义唤醒词_|_连续对话_|_多_Agent_路由_|_克隆音色_|_流式播放-f97316)](https://github.com/coderzc/open-xiaoai-bridge/releases)
 
 **小爱音箱与外部 AI 服务（小智 AI、OpenClaw）的桥接器**
 
@@ -36,7 +36,8 @@
 |------|------|
 | 🦞 **OpenClaw 集成** | 接入 [OpenClaw](https://github.com/openclaw/openclaw)，支持连续对话，可选豆包 TTS 或小爱原生 TTS |
 | 🤖 **小智 AI 集成** | 接入 [xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server) |
-| 🎙️ **自定义唤醒词** | 支持中英文，不同唤醒词可路由到不同 AI 服务 |
+| 🎙️ **自定义唤醒词** | 支持中英文，不同唤醒词可路由到不同 AI 服务或不同 OpenClaw Agent |
+| 🧠 **多 Agent 路由** | 一台音箱，多个唤醒词，每个唤醒词对应不同的 OpenClaw Agent Session，动态切换零开销 |
 | 💬 **连续对话** | 多轮对话无需反复唤醒，喊"小爱同学"可随时打断 |
 | ⚡ **VAD + KWS** | 语音活动检测前置，减少无效识别，更省电 |
 | 🌐 **HTTP API** | 远程播放文字/音频、控制音箱 |
@@ -417,6 +418,68 @@ async def before_wakeup(speaker, text, source, app):
 
 **返回值含义：** `"openclaw"` → 连续对话，`"xiaozhi"` → 小智 AI，`None` → 不处理（用户可自行调用 `app.send_to_openclaw()` 等方法）
 
+### 🧠 多 Agent 路由 — 一个唤醒词，一个专属 Agent
+
+`set_openclaw_session_key()` 让你在发送消息前动态切换目标 Agent Session，**无需重连，无性能开销**。结合自定义唤醒词，可以实现：
+
+> **一台音箱，N 个专属 AI 助手，按名字呼唤谁，谁就来响应。**
+
+```python
+# config.py
+
+AGENT_SESSIONS = {
+    "龙虾": "agent:assistant:open-xiaoai-bridge",
+    "小美": "agent:xiaomei:open-xiaoai-bridge",
+    "管家": "agent:butler:open-xiaoai-bridge",
+}
+
+async def before_wakeup(speaker, text, source, app):
+    if source == "kws":
+        for keyword, session_key in AGENT_SESSIONS.items():
+            if keyword in text:
+                app.set_openclaw_session_key(session_key)  # 切换到对应 Agent
+                await speaker.play(text=f"{keyword}来了")
+                return "openclaw"                          # 进入连续对话
+
+    if source == "xiaoai":
+        for keyword, session_key in AGENT_SESSIONS.items():
+            if f"召唤{keyword}" in text:
+                app.set_openclaw_session_key(session_key)
+                await speaker.abort_xiaoai()
+                return "openclaw"
+```
+
+配合唤醒词配置：
+
+```python
+"wakeup": {
+    "keywords": [
+        "你好龙虾", "你好小美", "你好管家",
+    ],
+},
+```
+
+此后你说"**你好龙虾**"，进入的是龙虾 Agent 的上下文；说"**你好小美**"，进入的是小美 Agent 的上下文 —— 同一台音箱，完全隔离的多个 AI 人格。
+
+退出时同样可以区分是哪个 Agent 结束了对话。`after_wakeup` 在 OpenClaw 退出时会收到 `session_key` 参数，取第二段即为 `agentId`：
+
+```python
+async def after_wakeup(speaker, source=None, session_key=None):
+    if source == "openclaw":
+        # session_key 格式：agent:<agentId>:<rest>，第二段即 agentId
+        agent_id = session_key.split(":")[1] if session_key else None
+        if agent_id == "assistant":
+            await speaker.play(text="龙虾，再见")
+        elif agent_id == "xiaomei":
+            await speaker.play(text="小美，再见")
+        elif agent_id == "butler":
+            await speaker.play(text="管家，再见")
+        else:
+            await speaker.play(text="再见")
+    if source == "xiaozhi":
+        await speaker.play(text="小智，再见")
+```
+
 ### 📝 rule_prompt — 约束 Agent 输出格式
 
 `rule_prompt` 会自动追加到每条发给 Agent 的消息末尾，用于约束输出格式。音箱场景只能播语音，需要告诉 Agent 不要返回 markdown、代码块等无法朗读的内容：
@@ -571,8 +634,76 @@ APP_CONFIG = {
 **首次连接出现 pairing required？**  
 正常流程。保持服务在线，到 OpenClaw UI 批准设备：**Nodes → Devices → Approve**。容器部署注意事项见[容器部署](#-容器部署)。
 
-**session_key 是什么？**  
-告诉 Gateway 把消息路由到哪个 Agent 会话，对应 OpenClaw 中配置的 session 标识。
+**session_key 是什么？**
+告诉 Gateway 把消息路由到哪个 Agent Session，格式为冒号分隔的层级路径：
+
+```
+agent:<agentId>:<rest>
+```
+
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| `agent` | 固定前缀 | `agent` |
+| `<agentId>` | OpenClaw 中配置的 Agent ID（默认为 `main`） | `main`、`assistant` |
+| `<rest>` | 会话标识，可自由命名，用于区分不同来源/场景 | `home`、`open-xiaoai-bridge` |
+
+常见格式举例：
+
+```
+agent:main:open-xiaoai-bridge          # 默认值（本项目）
+agent:main:main                        # OpenClaw 原生默认主会话
+agent:assistant:open-xiaoai-bridge     # 指定其他 Agent
+agent:main:direct:alice                # 按用户隔离
+```
+
+**如何在运行时动态切换 session_key？**
+
+每次唤醒触发 `before_wakeup` 之前，框架会自动将 `session_key` **重置为配置文件中的默认值**。因此：
+- 在 `before_wakeup` 中调用 `app.set_openclaw_session_key()` → 本次唤醒使用指定的 session
+- 不调用 → 自动使用配置文件中的 `openclaw.session_key`，不会沿用上一次的值
+
+这意味着你只需要在需要切换的路径里调用一次，不用担心"忘记重置"的问题。
+
+常见使用场景：
+
+**场景一：按唤醒词路由到不同 Agent**
+
+说"你好龙虾"唤醒龙虾 Agent，说"你好小美"唤醒小美 Agent：
+
+```python
+AGENT_SESSIONS = {
+    "龙虾": "agent:assistant:open-xiaoai-bridge",
+    "小美": "agent:xiaomei:open-xiaoai-bridge",
+    "管家": "agent:butler:open-xiaoai-bridge",
+}
+
+async def before_wakeup(speaker, text, source, app):
+    if source == "kws":
+        for keyword, session_key in AGENT_SESSIONS.items():
+            if keyword in text:
+                app.set_openclaw_session_key(session_key)
+                await speaker.play(text=f"{keyword}来了")
+                return "openclaw"
+```
+
+**场景二：每次唤醒生成独立 Session**
+
+每次对话互相隔离，适合以下情况：
+- "提问 → 回答"式交互，不需要 Agent 记住上下文
+- 长期使用同一 Session 导致 Agent 上下文堆积过长，影响响应质量和速度
+
+```python
+import uuid
+
+def new_session_key():
+    return f"agent:main:session-{uuid.uuid4().hex[:8]}"
+
+async def before_wakeup(speaker, text, source, app):
+    if source == "kws" and "龙虾" in text:
+        app.set_openclaw_session_key(new_session_key())
+        await speaker.play(text="龙虾来了")
+        return "openclaw"
+```
 
 **send_to_openclaw() 的返回值是什么？**
 - `send_to_openclaw(text)` → 成功返回 `run_id`（str），失败返回 `None`

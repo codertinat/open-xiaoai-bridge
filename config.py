@@ -3,25 +3,63 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 
 import requests
 
 
+# 每次唤醒生成独立 Session，对话互不干扰
+# 适合以下场景：
+#   - "提问 → 回答"式交互，不需要 Agent 记住上下文
+#   - 长期使用同一 Session 导致 Agent 上下文窗口堆积过长，影响响应质量和速度
+# def new_session_key():
+#     return f"agent:main:session-{uuid.uuid4().hex[:8]}"
+
+
 async def before_wakeup(speaker, text, source, app):
     """
-    处理收到的用户消息，并决定是否唤醒小智 AI
+    处理收到的用户消息，并决定是否唤醒 AI。
 
-    - source: 唤醒来源
-        - 'kws': 关键字唤醒
-        - 'xiaoai': 小爱同学收到用户指令
+    参数：
+        speaker : SpeakerManager，可调用 play/abort_xiaoai/wake_up 等方法
+        text    : 识别到的文字内容
+        source  : 唤醒来源
+                    'kws'    — 本地关键词唤醒（用户说了唤醒词）
+                    'xiaoai' — 小爱同学收到用户语音指令
+        app     : MainApp 实例，可调用 send_to_openclaw 等方法
 
-    返回值:
-        - "xiaozhi": 走小智流程
-        - "openclaw": 走 OpenClaw 连续对话流程
-        - None: 不处理（用户可在此自行调用 app.send_to_openclaw 等方法）
+    返回值：
+        "openclaw" — 进入 OpenClaw 连续对话流程
+        "xiaozhi"  — 进入小智 AI 流程
+        None       — 不做额外处理（可在此自行调用 app.send_to_openclaw 等）
+
+    ---
+    动态切换 session_key：
+        每次进入此函数前，框架会自动将 session_key 重置为配置文件中的默认值。
+        如需路由到其他 Agent，在 return "openclaw" 之前调用：
+            app.set_openclaw_session_key("agent:main:xxx")
+        不调用则自动使用 openclaw.session_key 的默认值，无需手动重置。
     """
     if source == "kws":
-        # Check if the keyword matches an OpenClaw wake word
+        # --- 示例一：按唤醒词路由到不同 Agent ---
+        # AGENT_SESSIONS = {
+        #     "龙虾": "agent:assistant:open-xiaoai-bridge",  # 说"你好龙虾" → 路由到 assistant Agent
+        #     "小美": "agent:xiaomei:open-xiaoai-bridge",    # 说"你好小美" → 路由到 xiaomei Agent
+        #     "管家": "agent:butler:open-xiaoai-bridge",     # 说"你好管家" → 路由到 butler Agent
+        # }
+        # for keyword, session_key in AGENT_SESSIONS.items():
+        #     if keyword in text:
+        #         app.set_openclaw_session_key(session_key)
+        #         await speaker.play(text=f"{keyword}来了")
+        #         return "openclaw"
+
+        # --- 示例二：每次唤醒生成独立 Session ---
+        # if "龙虾" in text:
+        #     app.set_openclaw_session_key(new_session_key())
+        #     await speaker.play(text="龙虾来了")
+        #     return "openclaw"
+
+        # Route to OpenClaw Agent by wake word
         if "龙虾" in text:
             await speaker.play(text="龙虾来了")
             return "openclaw"
@@ -29,39 +67,57 @@ async def before_wakeup(speaker, text, source, app):
         if "小智" in text:
             await speaker.play(text="小智来了")
             return "xiaozhi"
+
         return None
 
     if source == "xiaoai":
+        # --- 示例三：小爱指令按用户名路由到不同 Session ---
+        # if text == "召唤小美":
+        #     app.set_openclaw_session_key("agent:xiaomei:open-xiaoai-bridge")
+        #     await speaker.abort_xiaoai()
+        #     return "openclaw"
+
         if text == "召唤龙虾":
             await speaker.abort_xiaoai()
-            return "openclaw"  # OpenClaw 连续对话
+            return "openclaw"  # OpenClaw continuous conversation
 
         if text == "召唤小智":
             await speaker.abort_xiaoai()
-            return "xiaozhi"  # 小智 AI
+            return "xiaozhi"  # XiaoZhi AI
 
         if "让龙虾" in text:
             await speaker.abort_xiaoai()
-            # 单次代理：发送给 OpenClaw 并自动 TTS 播报回复
+            # One-shot: send to OpenClaw and play the reply via TTS
             await app.send_to_openclaw_and_play_reply(text.replace("让龙虾", ""))
-            return None  # 框架不做额外处理
+            return None  # No further handling by the framework
 
         if "告诉龙虾" in text:
             await speaker.abort_xiaoai()
-            # 只发送，不播报（由 Agent 自行调用 xiaoai-tts skill 播报）
+            # Fire-and-forget: let the Agent decide when/how to reply
             await app.send_to_openclaw(text.replace("告诉龙虾", ""))
             return None
 
 
-async def after_wakeup(speaker, source="xiaozhi"):
+async def after_wakeup(speaker, source=None, session_key=None):
     """
     退出唤醒状态
 
     - source: 退出来源
         - 'xiaozhi': 小智对话超时退出
         - 'openclaw': OpenClaw 连续对话退出
+    - session_key: 当前 OpenClaw session_key（仅 source='openclaw' 时传入）
+        可据此区分是哪个 Agent 退出，例如播放不同的退出提示语
     """
     if source == "openclaw":
+        # 示例：按 agentId 区分退出提示语
+        # session_key 格式：agent:<agentId>:<rest>，第二段即 agentId
+        # agent_id = session_key.split(":")[1] if session_key else None
+        # if agent_id == "assistant":
+        #     await speaker.play(text="助手，再见")
+        # elif agent_id == "xiaomei":
+        #     await speaker.play(text="小美，再见")
+        # else:
+        #     await speaker.play(text="再见")
         await speaker.play(text="龙虾，再见")
     if source == "xiaozhi":
         await speaker.play(text="小智，再见")
@@ -130,7 +186,12 @@ APP_CONFIG = {
     "openclaw": {
         "url": "ws://127.0.0.1:18789",  # OpenClaw WebSocket 地址
         "token": "your_openclaw_token",  # OpenClaw 认证令牌
-        "session_key": "agent:main:open-xiaoai-bridge", # 会话标识
+        # session_key 格式：agent:<agentId>:<rest>
+        #   agentId: OpenClaw 中配置的 Agent ID（默认为 main）
+        #   rest:    会话标识，可自由命名，用于区分不同来源/场景 （默认为 open-xiaoai-bridge)
+        # 也可在运行时动态切换（下一条消息即刻生效，无需重连）：
+        #   app.set_openclaw_session_key("agent:assistant:open-xiaoai-bridge")
+        "session_key": "agent:main:open-xiaoai-bridge",
         "identity_path": "/app/openclaw/identity/device.json",  # 设备身份文件路径；容器部署时建议挂载持久化目录
         "tts_speed": 1.0,  # TTS 语速 (0.5-2.0)，仅豆包 TTS 生效，小爱原生 TTS 不支持调速
         "tts_speaker": "xiaoai",  # "xiaoai" = 小爱原生 TTS；填豆包音色 ID 则用豆包 TTS；不设置则使用 tts.doubao.default_speaker

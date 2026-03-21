@@ -238,6 +238,15 @@ class WakeupSessionManager:
         before_wakeup = self.config.get_app_config("wakeup.before_wakeup")
         kws = get_kws()
         logger.info(f"[Wakeup] Received wakeup request from {source}: {text}")
+
+        # Reset session_key to config default before each wakeup,
+        # so paths that don't call set_openclaw_session_key() always use the default.
+        from core.openclaw import OpenClawManager
+        default_session_key = self.config.get_app_config("openclaw", {}).get(
+            "session_key", "agent:main:open-xiaoai-bridge"
+        )
+        OpenClawManager._session_key = default_session_key
+
         if kws:
             kws.pause()
         should_wakeup = await before_wakeup(
