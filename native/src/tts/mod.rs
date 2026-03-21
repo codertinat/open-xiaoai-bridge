@@ -191,9 +191,17 @@ pub fn tts_stream_play(
             send_pcm(pcm_chunk).await;
         }
 
-        if let Ok(Err(e)) = fetch_handle.await {
-            crate::pylog!("[TTS] Stream fetch error: {}", e);
-        }
+        let fetch_failed = match fetch_handle.await {
+            Ok(Err(e)) => {
+                crate::pylog!("[TTS] Stream fetch error: {}", e);
+                Some(e.to_string())
+            }
+            Err(e) => {
+                crate::pylog!("[TTS] Stream fetch task panicked: {}", e);
+                Some(e.to_string())
+            }
+            _ => None,
+        };
 
         let total_ms = started_at.elapsed().as_millis();
         let playback_duration_ms = total_pcm_bytes as u128 * 1000 / (sample_rate as u128 * 2);
@@ -209,6 +217,15 @@ pub fn tts_stream_play(
             total_pcm_bytes,
             remaining_ms,
         );
+
+        if let Some(err_msg) = fetch_failed {
+            if total_pcm_bytes == 0 {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "TTS stream fetch failed with no audio produced: {}",
+                    err_msg
+                )));
+            }
+        }
 
         if remaining_ms > 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(remaining_ms as u64)).await;
