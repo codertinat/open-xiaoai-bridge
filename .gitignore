@@ -37,6 +37,7 @@ core/models/
 .env.local
 
 tests/*.wav
+local_test/
 
 **/identity/**
 

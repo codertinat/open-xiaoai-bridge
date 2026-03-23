@@ -34,9 +34,15 @@ class XiaoAIConversationController:
 
     async def handle_text_command(self, text: str, speaker):
         if any(cmd in text for cmd in self.exit_command_keywords):
+            if not self.is_active():
+                logger.debug(
+                    f"[XiaoAI] 忽略退出指令，当前不在小爱连续对话中: {text}"
+                )
+                return
             logger.info("[XiaoAI] 👋 收到退出指令，立即退出连续对话模式")
             self.stop()
             await speaker.play(text=self.exit_prompt)
+            return
 
         if any(keyword in text for keyword in self.continuous_conversation_keywords):
             logger.info("[XiaoAI] 👋 收到开启连续对话指令，开启连续对话模式")

@@ -249,7 +249,7 @@ class WakeupSessionManager:
     async def wakeup(self, text, source):
         before_wakeup = self.config.get_app_config("wakeup.before_wakeup")
         kws = get_kws()
-        logger.info(f"[Wakeup] Received wakeup request from {source}: {text}")
+        logger.debug(f"[Wakeup] Received wakeup request from {source}: {text}")
 
         # Reset session_key to config default before each wakeup,
         # so paths that don't call set_openclaw_session_key() always use the default.

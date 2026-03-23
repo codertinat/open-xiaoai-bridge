@@ -221,6 +221,10 @@ class OpenClawManager:
                 agent_id = parts[1]
                 agent_match = cls._agent_tts_speakers.get(agent_id)
                 if agent_match:
+                    logger.debug(
+                        f"[OpenClaw] Resolved TTS speaker: "
+                        f"agent_id={agent_id}, speaker={agent_match}"
+                    )
                     return agent_match
 
         return cls._tts_speaker
@@ -929,6 +933,10 @@ class OpenClawManager:
 
             # Special value: use XiaoAI native TTS directly
             if resolved_tts_speaker == cls.XIAOAI_TTS_SPEAKER:
+                logger.info(
+                    f"[OpenClaw] Using OpenClaw TTS speaker: session_key={cls._session_key}, "
+                    f"speaker={resolved_tts_speaker}"
+                )
                 speaker = get_speaker()
                 if speaker:
                     await speaker.play(text=text, blocking=True)
@@ -950,6 +958,10 @@ class OpenClawManager:
 
             speaker_id = resolved_tts_speaker or tts_config.get(
                 "default_speaker", "zh_female_xiaohe_uranus_bigtts"
+            )
+            logger.info(
+                f"[OpenClaw] Using OpenClaw TTS speaker: session_key={cls._session_key}, "
+                f"speaker={speaker_id}, speed={cls._tts_speed}"
             )
 
             tts = DoubaoTTS(

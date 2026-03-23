@@ -156,7 +156,7 @@ class _KWS:
 
     def on_message(self, text: str):
         loop = get_app().loop if get_app() else get_xiaoai().async_loop
-        logger.info(f"[KWS] Dispatch wakeup event: {text}")
+        logger.debug(f"[KWS] Dispatch wakeup event: {text}")
         future = asyncio.run_coroutine_threadsafe(
             EventManager.wakeup(text, "kws"),
             loop,
