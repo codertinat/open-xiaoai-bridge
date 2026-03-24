@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## v1.0.3 - 2026-03-24
+## v1.0.3 - 2026-03-25
 
 ### 重点更新
 
@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
 - 修复外部唤醒词触发时，小爱仍然回声式回复的问题，降低路由到第三方 AI 时的干扰。
 - 修复用户喊出“小爱同学”打断后，小智唤醒会话没有完全恢复的问题，避免后续唤醒失效。
 - 在 Doubao TTS API 返回成功前增加请求校验，避免无效请求被误判为成功。
+- 优化 Doubao TTS 的错误处理与日志输出，减少重复报错，并在流式/后台播放失败时保留更完整的上下文。
+- 调整 `docker-compose.yml`，移除 `network_mode: host`，改善默认 Docker Compose 部署的兼容性。
 - 调整部分 XiaoZhi/OpenClaw 内部流程与日志细节，减少连续对话等待和排障成本。
 
 ### 文档更新
