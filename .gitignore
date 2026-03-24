@@ -39,6 +39,8 @@ core/models/
 tests/*.wav
 local_test/
 
+output/
+
 **/identity/**
 
 .claude

@@ -45,6 +45,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY main.py .
 COPY config.py .
 COPY core ./core
+COPY scripts ./scripts
 
 
 # Ensure sherpa_onnx can locate onnxruntime shared library at runtime.

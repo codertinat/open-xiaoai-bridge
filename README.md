@@ -759,43 +759,47 @@ APP_CONFIG = {
 
 2. **如何使用声音复刻？**
 
-    1. 在[火山引擎声音复刻控制台](https://console.volcengine.com/speech/new/experience/clone)上传 10-30 秒音频
-    2. 训练完成后到[音色库](https://console.volcengine.com/speech/new/voices?projectName=default)复制音色 ID（格式 `S_xxxxxxxx`）
-    3. **重要**：确保复刻音色与 `tts.doubao.app_id` 属于**同一个火山引擎项目**，否则无法使用
-    4. 填入配置：
+   1. 在[火山引擎控制台](https://console.volcengine.com/speech/service/10036?AppID=)「声音复刻详情」中获取预分配的 Speaker ID（格式 `S_xxxxxxxx`）
+   2. 准备一段 10-30 秒清晰人声音频（支持 wav/mp3/m4a 等，≤10MB）
+   3. 运行克隆脚本：
+   ```bash
+   python3 scripts/clone_voice.py --speaker-id S_xxxxxxxx --audio sample.wav
+   ```
+   训练完成后会输出 demo 试听链接和可用的模型类型（ICL 1.0 / ICL 2.0）。
+   4. **重要**：确保复刻音色与 `tts.doubao.app_id` 属于**同一个火山引擎项目**，否则无法使用。
+3. **如何将指定文本转成特定音色的音频文件？**
 
-    ```python
-    "tts": {
-        "doubao": {
-            "default_speaker": "S_xxxxxxxx",
-        }
-    }
-    ```
+   可以使用脚本 [scripts/generate\_tts.py](/Users/zc/projects/open-xiaoai-bridge/scripts/generate_tts.py)：
+   ```bash
+   python3 scripts/generate_tts.py \
+     --speaker-id zh_male_lengkugege_emo_v2_mars_bigtts \
+     --text "你好，今天心情很好" \
+     --emotion happy \
+     --output ./output/happy.wav
+   ```
+   其中 `--speaker-id` 必填，`--text` 和 `--text-file` 二选一，`--output` 用来指定输出文件名；`--emotion` 仅部分多情感音色支持。
 
-3. **支持流式播放吗？怎么配置？**
+4. **支持流式播放吗？怎么配置？**
 
-    支持。推荐配置：
+   支持。推荐配置：
+   ```python
+   "tts": {
+       "doubao": {
+           "stream": True,           # 流式播放，首音延迟更低
+           "audio_format": "pcm",    # 局域网推荐，首音更快
+           # "audio_format": "auto", # 短文本 PCM，长文本 MP3
+       }
+   }
+   ```
+   - `pcm`：首音快，流式稳定，长文本总耗时可能更高
+   - `mp3`：传输效率高，长文本更早结束
+   - `auto`：折中方案，按文本长度自动选择
 
-    ```python
-    "tts": {
-        "doubao": {
-            "stream": True,           # 流式播放，首音延迟更低
-            "audio_format": "pcm",    # 局域网推荐，首音更快
-            # "audio_format": "auto", # 短文本 PCM，长文本 MP3
-        }
-    }
-    ```
-
-    - `pcm`：首音快，流式稳定，长文本总耗时可能更高
-    - `mp3`：传输效率高，长文本更早结束
-    - `auto`：折中方案，按文本长度自动选择
-
-    冒烟测试（无需音箱，验证 TTS 是否正常）：
-
-    ```bash
-    python3 tests/test_tts_stream.py                                           # 测试流式 TTS 连通性
-    python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 8  # 对比 mp3/pcm 延迟
-    ```
+   冒烟测试（无需音箱，验证 TTS 是否正常）：
+   ```bash
+   python3 tests/test_tts_stream.py                                           # 测试流式 TTS 连通性
+   python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 8  # 对比 mp3/pcm 延迟
+   ```
 
 ***
 
