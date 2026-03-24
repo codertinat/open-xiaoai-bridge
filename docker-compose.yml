@@ -2,7 +2,6 @@ services:
   open-xiaoai-bridge:
     image: ghcr.io/coderzc/open-xiaoai-bridge:latest
     restart: unless-stopped
-    network_mode: host
     ports:
       - "4399:4399"
       - "9092:9092"
