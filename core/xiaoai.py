@@ -76,13 +76,12 @@ class XiaoAI:
             logger.info(
                 f"[XiaoAI] 🛑 小爱被其他唤醒词打断退出: {reason}"
             )
-
-        try:
-            await cls.speaker.run_shell("mphelper pause")
-        except Exception as exc:
-            logger.debug(
-                f"[XiaoAI] Failed to pause suppressed dialog {dialog_id}: {exc}"
-            )
+            try:
+                await cls.speaker.run_shell("mphelper pause")
+            except Exception as exc:
+                logger.debug(
+                    f"[XiaoAI] Failed to pause suppressed dialog {dialog_id}: {exc}"
+                )
 
     @classmethod
     def on_input_data(cls, data: bytes):

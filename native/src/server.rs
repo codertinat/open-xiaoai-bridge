@@ -34,20 +34,8 @@ async fn test() -> Result<(), AppError> {
         )
         .await;
 
-    let _ = RPC::instance()
-        .call_remote(
-            "start_play",
-            Some(json!(AudioConfig {
-                pcm: "noop".into(),
-                channels: 1,
-                bits_per_sample: 16,
-                sample_rate: 24000,
-                period_size: 1440 / 4,
-                buffer_size: 1440,
-            })),
-            None,
-        )
-        .await;
+    // aplay is started lazily by ensure_player_ready() on first audio send,
+    // avoiding empty-buffer underruns from idling aplay processes.
 
     Ok(())
 }

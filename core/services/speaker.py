@@ -116,13 +116,14 @@ class SpeakerManager:
 
     async def stop_device_audio(self) -> None:
         """
-        停止设备上的全部播放链路，并重启 PCM 播放通道。
+        停止设备上的全部播放链路。
+        aplay 不立即重启，由 Rust 侧 ensure_player_ready() 在首次
+        发送音频数据时按需启动，避免空 buffer 导致 underrun。
         """
         await self.run_shell(
             "killall tts_play.sh miplayer 2>/dev/null; mphelper pause"
         )
         await open_xiaoai_server.stop_playing()
-        await open_xiaoai_server.start_playing()
 
     async def wake_up(self, awake=True, silent=True):
         """

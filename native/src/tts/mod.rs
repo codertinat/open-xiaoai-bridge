@@ -72,6 +72,14 @@ async fn throttle_if_needed(
     }
 }
 
+/// Restart the remote aplay process before TTS playback begins.
+/// Forces a fresh aplay so its buffer is clean, then marks it ready
+/// so that subsequent send_pcm calls (and on_output_data) skip the RPC.
+async fn ensure_player_started() {
+    crate::PLAYER_READY.store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::ensure_player_ready().await;
+}
+
 /// Send PCM data to device, auto-chunking if larger than PLAY_CHUNK_SIZE.
 async fn send_pcm(pcm: Vec<u8>, token: u64) -> bool {
     if !is_playback_session_active(token) {
@@ -167,6 +175,7 @@ impl PcmPlaybackBuffer {
 }
 
 async fn play_pcm_with_buffer(pcm: Vec<u8>, sample_rate: u32, token: u64) {
+    ensure_player_started().await;
     let started_at = Instant::now();
     let pcm_len = pcm.len();
     let mut playback_buffer = PcmPlaybackBuffer::new(sample_rate);
@@ -264,6 +273,10 @@ pub fn tts_stream_play(
         // Track how many PCM bytes have been sent to device for throttling.
         let mut pcm_sent_bytes: usize = 0;
         let mut playback_start: Option<Instant> = None;
+
+        // Restart aplay right before we start feeding data, so its buffer
+        // is fresh and won't underrun while waiting for the first chunk.
+        ensure_player_started().await;
 
         while let Some(chunk) = rx.recv().await {
             if !is_playback_session_active(playback_token) {
@@ -486,6 +499,8 @@ pub fn tts_stream_play_background(
             let mut total_pcm_bytes: usize = 0;
             let mut pcm_sent_bytes: usize = 0;
             let mut playback_start: Option<Instant> = None;
+
+            ensure_player_started().await;
 
             while let Some(chunk) = rx.recv().await {
                 if !is_playback_session_active(playback_token) {

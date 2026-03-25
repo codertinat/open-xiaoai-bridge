@@ -44,7 +44,6 @@ class WakeupSessionManager:
 
         import open_xiaoai_server
         await open_xiaoai_server.stop_playing()
-        await open_xiaoai_server.start_playing()
         await open_xiaoai_server.start_recording()
 
     def on_interrupt(self):
