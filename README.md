@@ -71,6 +71,8 @@ docker compose up -d
 > image: ghcr.nju.edu.cn/coderzc/open-xiaoai-bridge:latest
 > ```
 
+> **💡 容器访问宿主机 OpenClaw**：如果需要让容器访问宿主机上的 OpenClaw，请查看 [Docker 常见问题](#-docker)。
+
 `docker-compose.yml` 已包含模型目录挂载：
 
 ```yaml
@@ -572,6 +574,67 @@ APP_CONFIG = {
 ***
 
 ## ❓ 常见问题
+
+### 🐳 Docker
+
+#### 1. 如果想在容器里通过 `127.0.0.1` 直连宿主机上的 OpenClaw，怎么办？
+
+默认 `docker-compose.yml` 已经去掉了 `network_mode: host`，不需要再额外修改这一行。
+
+需要注意：桥接模式下，容器里的 `127.0.0.1` / `localhost` 指向的是**容器自己**，不是宿主机。
+
+如果你想继续通过 `127.0.0.1` 去直连宿主机上的 OpenClaw，可以按下面两种方式处理：
+
+**方式 1：给容器加 hosts 映射**
+
+在 `docker-compose.yml` 里添加：
+
+```yaml
+services:
+    open-xiaoai-bridge:
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+```
+
+然后在 `config.py` 中把 OpenClaw 地址改成：
+
+```python
+    "openclaw": {
+        "url": "ws://host.docker.internal:18789",
+        "token": "xxxxx"
+        ...
+    }
+```
+
+**方式 2：如果 hosts 方式不行，就把 OpenClaw 改成监听 LAN**
+
+可以直接一起改成下面这样：
+
+```text
+# OpenClaw
+{
+  "gateway": {
+    "port": 18789,
+    "mode": "lan",
+    "controlUi": {
+      "allowedOrigins": [
+        "http://localhost:18789",
+        "http://127.0.0.1:18789",
+        "http://192.168.5.123:18789"
+      ]
+    }
+  }
+}
+
+# config.py
+    "openclaw": {
+        "url": "ws://192.168.5.123:18789",
+        "token": "xxxxx"
+        ...
+    }
+```
+
+PS: 最好固定 IP 地址。
 
 ### 🎙️ 唤醒词与连续对话
 
