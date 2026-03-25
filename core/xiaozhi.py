@@ -400,7 +400,7 @@ class XiaoZhi:
                     logger.info("Wakeup timeout, exit listening", module="XiaoZhi")
                     after_wakeup = self.config.get_app_config("wakeup.after_wakeup")
                     if after_wakeup and speaker:
-                        await after_wakeup(speaker)
+                        await after_wakeup(speaker, source="xiaozhi")
                     return
 
                 event_type, event_data = result
