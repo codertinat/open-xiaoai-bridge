@@ -14,7 +14,7 @@
 
 [📖 快速开始](#-快速开始) · [🦞 OpenClaw 集成](#-openclaw-集成) · [🔧 API 文档](#-api-server) · [🐛 常见问题](#-常见问题)
 
-> 本项目由 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 的 `examples/xiaozhi/` 演进而来，已成为独立项目。
+> 本项目受 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 启发，并参考其 `examples/xiaozhi/` 示例演进而来，现已作为独立项目持续维护。
 
 </div>
 
@@ -882,6 +882,20 @@ PS: 最好固定 IP 地址。
    python3 tests/test_tts_stream.py                                           # 测试流式 TTS 连通性
    python3 tests/test_tts_latency.py --formats mp3,pcm --rounds 3 --repeat 8  # 对比 mp3/pcm 延迟
    ```
+
+## 致谢
+
+感谢 [Open-XiaoAI](https://github.com/idootop/open-xiaoai) 及其 `examples/xiaozhi/` 示例提供的启发与参考。
+
+***
+
+## 🚨 免责声明
+
+本项目为非官方技术研究项目，与小米及其关联公司不存在任何隶属、合作、授权、认可或背书关系。
+
+使用者应自行确认其使用行为符合适用法律法规、平台规则、设备厂商政策及相关服务协议，并自行承担由下载、安装、配置、修改、传播或使用本项目所产生的全部风险与责任。
+
+详细免责声明请见 [DISCLAIMER.md](./DISCLAIMER.md)。项目授权与分发条件以仓库中的 [LICENSE](./LICENSE) 文件为准。
 
 ***
 
