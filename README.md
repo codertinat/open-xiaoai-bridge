@@ -585,25 +585,14 @@ APP_CONFIG = {
 
 如果你想继续通过 `127.0.0.1` 去直连宿主机上的 OpenClaw，可以按下面两种方式处理：
 
-**方式 1：给容器加 hosts 映射**
+**方式 1：增加 `network_mode: host`**
 
 在 `docker-compose.yml` 里添加：
 
 ```yaml
 services:
     open-xiaoai-bridge:
-        extra_hosts:
-            - "host.docker.internal:host-gateway"
-```
-
-然后在 `config.py` 中把 OpenClaw 地址改成：
-
-```python
-    "openclaw": {
-        "url": "ws://host.docker.internal:18789",
-        "token": "xxxxx"
-        ...
-    }
+        network_mode: host
 ```
 
 **方式 2：如果 hosts 方式不行，就把 OpenClaw 改成监听 LAN**
