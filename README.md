@@ -46,9 +46,11 @@
 2. **🛠️ 音箱补丁程序安装 Client** — 在音箱上运行 Rust Client 端
    - [补丁程序安装教程](https://github.com/coderzc/open-xiaoai/blob/main/packages/client-rust/README.md)
 
-### 📥 模型文件（小智/OpenClaw 模式需要）
+### 📥 模型文件
 
-如果你启用小智 AI 或 OpenClaw 连续对话功能，需要下载 VAD + KWS + ASR 模型文件：
+如果你启用小智 AI，或 OpenClaw 连续对话使用 `local_asr`，需要下载 `VAD + KWS + ASR` 模型文件。
+
+如果 OpenClaw 连续对话使用 `xiaoai_asr`，只需要 `VAD + KWS`，不需要本地 ASR 模型。
 
 1. 从 [releases](https://github.com/coderzc/open-xiaoai-bridge/releases/tag/vad-kws-asr-models) 下载模型压缩包
 2. 解压模型文件（路径见下方具体部署方式）
@@ -274,7 +276,8 @@ flowchart TB
 
 ```
 唤醒词 "你好龙虾" → WakeupSessionManager → OpenClawConversationController
-→ 循环: VAD 检测语音 → SherpaASR 离线识别 → OpenClaw → TTS 播放
+→ local_asr: VAD 检测语音 → SherpaASR 离线识别 → OpenClaw → TTS 播放
+→ xiaoai_asr: 静默唤醒小爱 → 接管小爱原生 ASR → OpenClaw → TTS 播放
 → 说"退出"/"再见"退出
 ```
 
@@ -342,15 +345,25 @@ curl -X POST http://localhost:9092/api/interrupt
 
 #### 🎙️ 方式一：连续对话
 
-用自定义唤醒词触发后进入多轮对话循环，全程本地处理，不依赖小爱 ASR：
+用自定义唤醒词触发后进入多轮对话循环，支持两种输入模式：
 
 ```
-唤醒词 "你好龙虾" → 提示音 → 你说话 → [VAD检测] → [本地ASR识别] → OpenClaw Agent → [TTS播报] → 提示音 → 你继续说 → ...
+local_asr: 本地 VAD + SherpaASR
+xiaoai_asr: 接管小爱原生 ASR
+```
+
+`config.py` 示例：
+
+```python
+"openclaw": {
+    "input_mode": "xiaoai_asr",
+}
 ```
 
 - 说"退出"或"再见"退出对话
 - 小爱唤醒时自动打断 TTS 并退出
 - 退出关键词可自定义
+- `xiaoai_asr` 模式下不需要本地 ASR 模型
 
 触发方式见下方[自定义唤醒词](#-自定义唤醒词)，`before_wakeup` 返回 `"openclaw"` 即进入连续对话。
 
@@ -502,6 +515,7 @@ async def after_wakeup(speaker, source=None, session_key=None):
 
 ```python
 "openclaw": {
+    "input_mode": "xiaoai_asr",
     # 自动播放/连续对话用：约束输出格式
     "rule_prompt": "注意：将结果处理成纯文字版，不要返回任何 markdown 格式，也不要包含任何代码块，并将字数控制在300字以内",
     # Agent 自主播报用：告诉 Agent 需要调用 skill
@@ -631,11 +645,14 @@ APP_CONFIG = {
 
 1. **模型文件在哪下载？**
 
-    启用小智 AI 或 OpenClaw 连续对话功能需要下载 VAD + KWS + ASR 模型文件，详见[快速开始 - Docker Compose](#-docker-compose推荐) 或 [本地编译](#-本地编译) 章节。
+    小智 AI 和 `local_asr` 模式需要 `VAD + KWS + ASR` 模型文件。  
+    `xiaoai_asr` 模式只需要 `VAD + KWS`。
+
+    详见[快速开始 - Docker Compose](#-docker-compose推荐) 或 [本地编译](#-本地编译) 章节。
 
 2. **如何切换 ASR 语音识别模型？**
 
-    支持两种离线语音识别模型，在 `config.py` 中配置：
+    仅 `openclaw.input_mode = "local_asr"` 时，本地离线 ASR 配置才会生效。在 `config.py` 中配置：
 
     ```python
     APP_CONFIG = {

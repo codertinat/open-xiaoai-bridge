@@ -1,12 +1,16 @@
 """OpenClaw continuous conversation controller.
 
 After a custom wake word (e.g. "你好龙虾") triggers wakeup, this module
-drives a local VAD -> ASR -> OpenClaw -> TTS loop that runs independently
-of the XiaoZhi session state machine.
+drives either:
+  - local VAD -> ASR -> OpenClaw -> TTS
+  - XiaoAI native ASR -> OpenClaw -> TTS
+
+The selected input path runs independently of the XiaoZhi session state
+machine.
 
 Key design decisions:
-  - Uses its own asyncio.Future for waiting on VAD events so it never
-    conflicts with WakeupSessionManager.wait_next_step().
+  - Uses per-session asyncio.Future objects so it never conflicts with the
+    XiaoZhi wakeup session state machine.
   - Never calls abort_xiaoai() (which would break the FileMonitor).
   - TTS playback is blocking (awaited), so the next listening round
     only starts after the response has finished playing.
@@ -43,7 +47,10 @@ from core.utils.logger import logger
 
 
 class OpenClawConversationController:
-    """Manages multi-turn OpenClaw conversation via local VAD + ASR."""
+    """Manages multi-turn OpenClaw conversation."""
+
+    LOCAL_ASR_INPUT = "local_asr"
+    XIAOAI_ASR_INPUT = "xiaoai_asr"
 
     def __init__(self):
         self.config = ConfigManager.instance()
@@ -51,6 +58,8 @@ class OpenClawConversationController:
 
         # Per-session asyncio.Future used to receive VAD events
         self._vad_future: asyncio.Future | None = None
+        # Per-session asyncio.Future used to receive XiaoAI native ASR results
+        self._xiaoai_asr_future: asyncio.Future | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # Playback token for the current TTS session
         self._playback_token: int | None = None
@@ -67,6 +76,23 @@ class OpenClawConversationController:
     @property
     def timeout(self) -> int:
         return int(self.config.get_app_config("wakeup.timeout", 20))
+
+    @property
+    def input_mode(self) -> str:
+        mode = self._cfg("input_mode", self.LOCAL_ASR_INPUT)
+        if not isinstance(mode, str):
+            return self.LOCAL_ASR_INPUT
+        normalized = mode.strip().lower()
+        if normalized in {self.LOCAL_ASR_INPUT, self.XIAOAI_ASR_INPUT}:
+            return normalized
+        logger.warning(
+            f"Unknown openclaw.input_mode={mode!r}, fallback to {self.LOCAL_ASR_INPUT}",
+            module="OpenClaw Conv",
+        )
+        return self.LOCAL_ASR_INPUT
+
+    def uses_xiaoai_asr(self) -> bool:
+        return self.input_mode == self.XIAOAI_ASR_INPUT
 
     # ---- public API ----
 
@@ -99,9 +125,23 @@ class OpenClawConversationController:
             return
         self.active = False
         self._cancel_vad_future()
+        self._cancel_xiaoai_asr_future()
         if self._playback_token is not None:
             open_xiaoai_server.stop_tts_playback(self._playback_token)
             self._playback_token = None
+        if self.uses_xiaoai_asr():
+            speaker = get_speaker()
+            if speaker and self._loop:
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        speaker.wake_up(awake=False),
+                        self._loop,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"Failed to stop XiaoAI native listening: {exc}",
+                        module="OpenClaw Conv",
+                    )
         logger.info("👋 退出 OpenClaw 连续对话模式", module="OpenClaw Conv")
 
     # ---- conversation loop ----
@@ -121,14 +161,19 @@ class OpenClawConversationController:
         logger.debug("Ready to listen", module="OpenClaw Conv")
 
         while self.active:
-            result = await self._run_one_turn()
+            if self.uses_xiaoai_asr():
+                result = await self._run_one_turn_with_xiaoai_asr()
+            else:
+                result = await self._run_one_turn_with_local_asr()
             if result in ("exit", "timeout"):
+                if self.uses_xiaoai_asr():
+                    await self._stop_xiaoai_native_listening()
                 await self._call_after_wakeup()
                 break
             elif result == "error":
                 break
 
-    async def _run_one_turn(self) -> str:
+    async def _run_one_turn_with_local_asr(self) -> str:
         """Execute a single conversation turn.
 
         Returns:
@@ -190,6 +235,38 @@ class OpenClawConversationController:
         await self._wait_for_silence(vad)
         logger.debug("Ready to listen", module="OpenClaw Conv")
 
+        return "continue"
+
+    async def _run_one_turn_with_xiaoai_asr(self) -> str:
+        """Execute a single conversation turn using XiaoAI native ASR."""
+        text = await self._wait_for_xiaoai_asr_text()
+        if text is None:
+            return "timeout"
+        if not text:
+            logger.debug("XiaoAI native ASR empty, retrying", module="OpenClaw Conv")
+            return "continue"
+
+        for kw in self.exit_keywords:
+            if kw in text:
+                logger.info(f"Exit keyword: {kw}", module="OpenClaw Conv")
+                return "exit"
+
+        full_text = text
+        if OpenClawManager._rule_prompt:
+            full_text = text + "\n" + OpenClawManager._rule_prompt
+        response = await OpenClawManager.send(full_text, wait_response=True)
+        if response is None:
+            logger.warning("No response from OpenClaw", module="OpenClaw Conv")
+            speaker = get_speaker()
+            if speaker:
+                await speaker.play(text="抱歉，我没有收到回复")
+            return "continue"
+
+        await self._stop_recording()
+        await self._play_tts(str(response))
+        await self._play_notify()
+        await self._start_recording()
+        logger.debug("Ready for next XiaoAI native ASR round", module="OpenClaw Conv")
         return "continue"
 
     # ---- VAD integration ----
@@ -276,6 +353,91 @@ class OpenClawConversationController:
         if self._vad_future and not self._vad_future.done():
             self._loop.call_soon_threadsafe(self._vad_future.cancel)
         self._vad_future = None
+
+    async def _wait_for_xiaoai_asr_text(self) -> str | None:
+        """Wake XiaoAI and wait for a final native ASR result."""
+        speaker = get_speaker()
+        if not speaker:
+            logger.error("Speaker not available", module="OpenClaw Conv")
+            return None
+
+        self._xiaoai_asr_future = self._loop.create_future()
+        try:
+            logger.debug("Triggering XiaoAI native ASR", module="OpenClaw Conv")
+            await speaker.wake_up(awake=True, silent=True)
+            result = await asyncio.wait_for(
+                self._xiaoai_asr_future,
+                timeout=self.timeout + 5,
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.debug("XiaoAI native ASR timeout", module="OpenClaw Conv")
+            return None
+        finally:
+            self._xiaoai_asr_future = None
+
+    def consume_xiaoai_recognize_result(
+        self,
+        dialog_id: str,
+        text: str,
+        is_final,
+        is_vad_begin,
+    ) -> bool:
+        """Consume XiaoAI native ASR events while OpenClaw is waiting."""
+        if not (
+            self.active
+            and self.uses_xiaoai_asr()
+            and self._xiaoai_asr_future
+        ):
+            return False
+
+        normalized_text = text.strip() if isinstance(text, str) else ""
+        if not is_final:
+            logger.debug(
+                f"Ignoring partial XiaoAI ASR result: {normalized_text}",
+                module="OpenClaw Conv",
+            )
+            return True
+
+        # Silent wakeup may emit an empty final marker before real speech starts.
+        if not normalized_text and is_vad_begin is False:
+            logger.debug("Ignoring XiaoAI wake marker for native ASR", module="OpenClaw Conv")
+            return True
+
+        if normalized_text:
+            logger.info(f"XiaoAI native ASR recognized: {normalized_text}", module="OpenClaw Conv")
+            self._resolve_xiaoai_asr_future(normalized_text)
+            return True
+
+        logger.debug("XiaoAI native ASR returned empty final text", module="OpenClaw Conv")
+        self._resolve_xiaoai_asr_future("")
+        return True
+
+    def _resolve_xiaoai_asr_future(self, text: str):
+        """Resolve the pending XiaoAI ASR future on the owner loop."""
+        if self._xiaoai_asr_future and not self._xiaoai_asr_future.done():
+            self._loop.call_soon_threadsafe(self._xiaoai_asr_future.set_result, text)
+
+    def _cancel_xiaoai_asr_future(self):
+        """Cancel any pending XiaoAI ASR future."""
+        if self._xiaoai_asr_future and not self._xiaoai_asr_future.done():
+            self._loop.call_soon_threadsafe(self._xiaoai_asr_future.cancel)
+        self._xiaoai_asr_future = None
+
+    async def _stop_xiaoai_native_listening(self):
+        """Exit XiaoAI native listening before playing the goodbye prompt."""
+        speaker = get_speaker()
+        if not speaker:
+            return
+        try:
+            await speaker.stop_device_audio()
+            await speaker.wake_up(awake=False)
+            await asyncio.sleep(0.15)
+        except Exception as exc:
+            logger.debug(
+                f"Failed to stop XiaoAI native listening: {exc}",
+                module="OpenClaw Conv",
+            )
 
     async def _wait_for_silence(self, vad):
         """Wait until the environment is silent before starting to listen.

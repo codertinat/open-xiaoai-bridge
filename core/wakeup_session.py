@@ -94,6 +94,23 @@ class WakeupSessionManager:
         """Called by VAD when silence is detected."""
         pass
 
+    def consume_openclaw_xiaoai_asr_result(
+        self,
+        dialog_id: str,
+        text: str,
+        is_final,
+        is_vad_begin,
+    ) -> bool:
+        """Route XiaoAI native ASR results to the active OpenClaw controller."""
+        if not self._openclaw_controller or not self._openclaw_controller.is_active():
+            return False
+        return self._openclaw_controller.consume_xiaoai_recognize_result(
+            dialog_id=dialog_id,
+            text=text,
+            is_final=is_final,
+            is_vad_begin=is_vad_begin,
+        )
+
     async def wakeup(self, text, source):
         before_wakeup = self.config.get_app_config("wakeup.before_wakeup")
         kws = get_kws()

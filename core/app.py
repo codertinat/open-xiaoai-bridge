@@ -151,10 +151,20 @@ class MainApp:
             VAD.start()
             KWS.start()
 
-            # Pre-warm SenseVoice ASR model in background
+            # Pre-warm local ASR only when OpenClaw is configured to use it.
             if self._enable_openclaw:
-                from core.services.audio.asr.sherpa import SherpaASR
-                threading.Thread(target=SherpaASR._ensure_loaded, daemon=True, name="asr-warmup").start()
+                input_mode = self.config.get_app_config(
+                    "openclaw.input_mode",
+                    "local_asr",
+                )
+                if input_mode == "local_asr":
+                    from core.services.audio.asr.sherpa import SherpaASR
+
+                    threading.Thread(
+                        target=SherpaASR._ensure_loaded,
+                        daemon=True,
+                        name="asr-warmup",
+                    ).start()
 
     def _run_event_loop(self):
         """Run asyncio event loop in separate thread."""

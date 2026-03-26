@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 
 import numpy as np
 import open_xiaoai_server
@@ -30,7 +31,9 @@ class XiaoAI:
     _async_loop_ready = threading.Event()
     _external_wakeup_keywords: set[str] = set()
     _suppressed_dialog_ids: set[str] = set()
+    _suppressed_dialog_last_attempt: dict[str, float] = {}
     _MAX_SUPPRESSED_DIALOGS = 100
+    _SUPPRESS_RETRY_INTERVAL = 0.35
 
     @classmethod
     def refresh_runtime_config(cls, *_args):
@@ -68,20 +71,30 @@ class XiaoAI:
                 f"[XiaoAI] Clearing {len(cls._suppressed_dialog_ids)} stale suppressed dialog_ids"
             )
             cls._suppressed_dialog_ids.clear()
+            cls._suppressed_dialog_last_attempt.clear()
 
         is_new_dialog = dialog_id not in cls._suppressed_dialog_ids
         cls._suppressed_dialog_ids.add(dialog_id)
 
         if is_new_dialog:
             logger.info(
-                f"[XiaoAI] 🛑 小爱被其他唤醒词打断退出: {reason}"
+                f"[XiaoAI] 🛑 停止小爱当前对话: {reason}"
             )
-            try:
-                await cls.speaker.run_shell("mphelper pause")
-            except Exception as exc:
-                logger.debug(
-                    f"[XiaoAI] Failed to pause suppressed dialog {dialog_id}: {exc}"
-                )
+
+        now = time.monotonic()
+        last_attempt = cls._suppressed_dialog_last_attempt.get(dialog_id, 0.0)
+        if not is_new_dialog and (now - last_attempt) < cls._SUPPRESS_RETRY_INTERVAL:
+            return
+
+        cls._suppressed_dialog_last_attempt[dialog_id] = now
+        try:
+            await cls.speaker.run_shell(
+                "killall tts_play.sh miplayer 2>/dev/null; mphelper pause"
+            )
+        except Exception as exc:
+            logger.debug(
+                f"[XiaoAI] Failed to pause suppressed dialog {dialog_id}: {exc}"
+            )
 
     @classmethod
     def on_input_data(cls, data: bytes):
@@ -148,6 +161,7 @@ class XiaoAI:
                     return
                 if namespace == "Dialog" and header_name == "Finish":
                     cls._suppressed_dialog_ids.discard(dialog_id)
+                    cls._suppressed_dialog_last_attempt.pop(dialog_id, None)
                     logger.debug(
                         f"[XiaoAI] Cleared suppressed dialog: {dialog_id}"
                     )
@@ -176,6 +190,19 @@ class XiaoAI:
                         text = ""
                     is_final = payload.get("is_final")
                     is_vad_begin = payload.get("is_vad_begin")
+
+                    if EventManager.consume_openclaw_xiaoai_asr_result(
+                        dialog_id=dialog_id,
+                        text=text,
+                        is_final=is_final,
+                        is_vad_begin=is_vad_begin,
+                    ):
+                        if dialog_id and text and is_final:
+                            await cls._suppress_dialog(
+                                dialog_id,
+                                f"OpenClaw 接管原生 ASR",
+                            )
+                        return
                     
                     # 只有明确的 is_vad_begin=False 且没有文本时才触发唤醒
                     # 避免重复触发
@@ -184,7 +211,10 @@ class XiaoAI:
                         cls.conversation.reset_retries()
                         EventManager.on_interrupt()
                     elif text and is_final and cls._is_external_wakeup_text(text):
-                        await cls._suppress_dialog(dialog_id, text)
+                        await cls._suppress_dialog(
+                            dialog_id,
+                            f"外部唤醒词接管: {text}",
+                        )
                         return
                     elif text and is_final:
                         logger.info(f"[XiaoAI] 🔥 收到指令: {text}")
